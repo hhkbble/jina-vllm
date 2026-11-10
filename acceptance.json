@@ -1,0 +1,20 @@
+{
+  "model_revision": "e8a93f33f0b22108f8c2364f8484ce3422552fbc",
+  "baseline": "9 frozen calibration queries plus 4 semantic probes; never retune on heldout",
+  "bf16_vs_hf": {
+    "score_max_abs": 0.01,
+    "vector_max_abs": 0.25,
+    "vector_p95_abs": 0.05
+  },
+  "cpu_merge_vs_hf": {"score_max_abs": 0.002},
+  "fp8_vs_bf16": {
+    "score_max_abs": 0.03,
+    "vector_max_abs": 0.5,
+    "vector_p95_abs": 0.1,
+    "heldout_mean_ndcg10_loss": 0.01,
+    "heldout_mean_mrr10_loss": 0.02
+  },
+  "chunked_prefill": {"score_max_abs": 0.01},
+  "performance": {"minimum_geomean_latency_speedup": 1.05},
+  "scope": "Engineering acceptance on the frozen local workload, not a downstream business quality guarantee. No external business budget was supplied."
+}

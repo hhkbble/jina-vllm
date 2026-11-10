@@ -3,7 +3,8 @@
 Independent out-of-tree vLLM integration for `jinaai/jina-reranker-v3.5`.
 Current status: implementation is in progress. The package and opt-in plugin
 entrypoints and official request algorithm are implemented. Independent
-algorithm tests pass; model and serving acceptance are pending.
+algorithm tests and native BF16 structural/numerical checks pass on RTX 5090.
+HTTP and FP8 acceptance are in progress.
 
 Local design documents and reports live in `docs/`, which is intentionally
 excluded from version control and is not included in a new clone. Coding-agent
