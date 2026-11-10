@@ -40,8 +40,10 @@ class FakeEngine:
         self.eager_fail = False
         self.missing = False
         self.misidentify = False
+        self.duplicate = False
         self.active = asyncio.Event()
         self.abort_event = asyncio.Event()
+        self.closed_at_abort = []
 
     async def get_supported_tasks(self):
         return ("token_embed",)
@@ -65,19 +67,23 @@ class FakeEngine:
                 ids = prompt["prompt_token_ids"]
                 count = ids.count(DOC_TOKEN_ID)
                 vectors = torch.ones(count + 1, 512, dtype=torch.bfloat16)
-                yield PoolingRequestOutput(
+                output = PoolingRequestOutput(
                     request_id="wrong" if self.misidentify else request_id,
                     outputs=PoolingOutput(data=vectors),
                     prompt_token_ids=ids,
                     num_cached_tokens=0,
                     finished=True,
                 )
+                yield output
+                if self.duplicate:
+                    yield output
             finally:
                 self.closed.append(request_id)
 
         return run()
 
     async def abort(self, request_ids):
+        self.closed_at_abort = list(self.closed)
         self.aborted.extend(request_ids)
         self.abort_event.set()
         if self.fail_abort:
@@ -279,6 +285,7 @@ async def test_cancellation_closes_before_abort(serving):
         await task
     assert len(engine.aborted) == 2
     assert set(engine.closed) == set(engine.started)
+    assert set(engine.closed_at_abort) == set(engine.started)
 
 
 @pytest.mark.asyncio
@@ -298,6 +305,18 @@ async def test_install_is_scoped_and_idempotent(serving):
     replacement = state.serving_scores
     await install_serving(engine, state)
     assert state.serving_scores is replacement
+
+
+@pytest.mark.asyncio
+async def test_install_rejects_unsupported_version(serving, monkeypatch):
+    from jina_vllm import contract
+
+    engine, handler, _ = serving
+    state = SimpleNamespace(serving_scores=handler)
+    monkeypatch.setattr(contract, "version", lambda name: "0.34.0")
+    with pytest.raises(RuntimeError, match="0.33.0"):
+        await install_serving(engine, state)
+    assert state.serving_scores is handler
 
 
 @pytest.mark.asyncio
@@ -361,7 +380,7 @@ async def test_fixed_profile_equivalent_options_and_empty_text(serving):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["missing", "misidentify"])
+@pytest.mark.parametrize("failure", ["missing", "misidentify", "duplicate"])
 async def test_internal_output_contract_errors_are_500(serving, failure):
     engine, _, client = serving
     setattr(engine, failure, True)
@@ -390,3 +409,33 @@ def test_plugin_startup_logs_use_native_handlers():
         check=True,
     )
     assert "plugin-log-receipt" in result.stdout + result.stderr
+
+
+@pytest.mark.asyncio
+async def test_drain_failure_logs_without_replacing_cancellation(caplog):
+    import logging
+
+    from jina_vllm.serving import _merge_blocks, logger
+
+    started = asyncio.Event()
+
+    async def producer():
+        try:
+            started.set()
+            await asyncio.Event().wait()
+            yield None
+        finally:
+            raise RuntimeError("producer cleanup failed")
+
+    iterator = _merge_blocks([producer()])
+    logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.ERROR, logger=logger.name):
+            task = asyncio.create_task(anext(iterator))
+            await started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert "producer cleanup failed" in caplog.text
+    finally:
+        logger.removeHandler(caplog.handler)
