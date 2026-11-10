@@ -1,4 +1,6 @@
+import hashlib
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -30,6 +32,15 @@ def tokenizer(snapshot):
 
 @pytest.fixture(scope="session")
 def reference_module(snapshot):
+    manifest = json.loads(
+        (Path(__file__).parents[1] / "model-reference.json").read_text()
+    )
+    expected = next(
+        row["sha256"] for row in manifest["files"] if row["path"] == "modeling.py"
+    )
+    assert (
+        hashlib.sha256((snapshot / "modeling.py").read_bytes()).hexdigest() == expected
+    )
     spec = importlib.util.spec_from_file_location(
         "jina_reference", snapshot / "modeling.py"
     )

@@ -1,3 +1,5 @@
+# Native constructor adapted from vLLM jina.py (Apache-2.0).
+# Copyright contributors to the vLLM project. See NOTICE.
 """Native Qwen3 computation with v3.5's per-layer attention windows."""
 
 from torch import nn

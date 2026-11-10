@@ -1,0 +1,2 @@
+# Aligned with the pinned vLLM tools/pre_commit/.shellcheckrc.
+disable=SC1091,SC2004,SC2129,SC2155,SC2164

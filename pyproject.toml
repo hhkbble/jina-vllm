@@ -7,6 +7,7 @@ name = "jina-reranker-v35-vllm"
 version = "0.1.0"
 description = "Out-of-tree vLLM support for Jina Reranker v3.5"
 readme = "README.md"
+license-files = ["NOTICE", "licenses/*"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "vllm==0.33.0",
@@ -17,6 +18,7 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=1",
     "ruff==0.14.0",
+    "shellcheck-py==0.11.0.1",
 ]
 
 [project.entry-points."vllm.general_plugins"]
@@ -55,6 +57,7 @@ docstring-code-format = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-ra"
 asyncio_default_fixture_loop_scope = "function"
 markers = ["gpu: real model and GPU acceptance (explicit opt-in)"]

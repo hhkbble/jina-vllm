@@ -1,6 +1,7 @@
 """Run one precision at a time; preserve vectors and scores for later comparison."""
 
 import argparse
+import hashlib
 import json
 import os
 import time
@@ -47,6 +48,8 @@ def engine_kwargs(args):
                 "linear_backend": "cutlass",
             },
         )
+    if args.native_quant_op:
+        options["compilation_config"] = {"custom_ops": ["none", "+quant_fp8"]}
     if args.profile:
         options["profiler_config"] = {
             "profiler": "torch",
@@ -65,6 +68,17 @@ def inspect_model(model):
             method = module.quant_method
             kernel = getattr(method, "fp8_linear", None)
             scale = getattr(module, "weight_scale", None)
+
+            def tensor_hash(tensor):
+                return hashlib.sha256(
+                    tensor.detach()
+                    .cpu()
+                    .contiguous()
+                    .view(torch.uint8)
+                    .numpy()
+                    .tobytes()
+                ).hexdigest()
+
             linears.append(
                 dict(
                     name=name,
@@ -74,6 +88,8 @@ def inspect_model(model):
                     shape=list(module.weight.shape),
                     scale_dtype=None if scale is None else str(scale.dtype),
                     input_scale=str(getattr(module, "input_scale", None)),
+                    weight_sha256=tensor_hash(module.weight),
+                    scale_sha256=None if scale is None else tensor_hash(scale),
                 )
             )
         if isinstance(module, Attention):
@@ -224,8 +240,13 @@ def main():
     parser.add_argument("--batch-tokens", type=int, default=8192)
     parser.add_argument("--profile", type=Path)
     parser.add_argument(
+        "--native-quant-op",
+        action="store_true",
+        help="Diagnostic: use native FP8 activation quant custom op",
+    )
+    parser.add_argument(
         "--hf-attention",
-        default="sdpa",
+        default="flex_attention",
         choices=["sdpa", "flex_attention", "flash_attention_2"],
     )
     parser.add_argument("--split", choices=["calibration", "heldout"])

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/env.sh"
+cd "$JINA_VLLM_PROJECT_ROOT"
 mode="${1:-bf16}"
 shift "$(( $# > 0 ? 1 : 0 ))"
 if [[ "$mode" != bf16 && "$mode" != fp8 ]]; then
