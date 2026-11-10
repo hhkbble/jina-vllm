@@ -59,6 +59,9 @@ Commit completed, coherent development milestones rather than waiting until the
 end of implementation. Check the working tree and preserve unrelated changes.
 Run checks appropriate to each milestone and report what was actually verified.
 Run `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest`
-for code milestones. Real GPU acceptance is opt-in and runs separately.
+for code milestones. Real GPU acceptance is opt-in and runs separately; set `JINA_GPU_ARTIFACTS`
+to trusted receipts from the offline tools. See `tools/* --help` and local
+`docs/acceptance-report.md` for commands and current gate status.
+Use a child logger under `vllm.jina_vllm` for native startup/cleanup receipts.
 Distinguish environment/import checks from model, HTTP, numerical, and performance
 acceptance; only claim results supported by executed validation.

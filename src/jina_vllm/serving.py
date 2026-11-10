@@ -11,7 +11,8 @@ from .contract import ARCH, validate_model_contract
 from .io_processor import Jina35ScoringIOProcessor
 from .ranking import RankingPlan
 
-logger = init_logger(__name__)
+# vLLM configures handlers on its own logging namespace.
+logger = init_logger("vllm.jina_vllm.serving")
 
 
 @dataclass(kw_only=True)

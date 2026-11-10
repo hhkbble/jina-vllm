@@ -39,6 +39,7 @@ class FakeEngine:
         self.fail_abort = False
         self.eager_fail = False
         self.missing = False
+        self.misidentify = False
         self.active = asyncio.Event()
         self.abort_event = asyncio.Event()
 
@@ -65,7 +66,7 @@ class FakeEngine:
                 count = ids.count(DOC_TOKEN_ID)
                 vectors = torch.ones(count + 1, 512, dtype=torch.bfloat16)
                 yield PoolingRequestOutput(
-                    request_id=request_id,
+                    request_id="wrong" if self.misidentify else request_id,
                     outputs=PoolingOutput(data=vectors),
                     prompt_token_ids=ids,
                     num_cached_tokens=0,
@@ -357,3 +358,35 @@ async def test_fixed_profile_equivalent_options_and_empty_text(serving):
     )
     assert response.status_code == 200, response.text
     assert len(response.json()["data"]) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["missing", "misidentify"])
+async def test_internal_output_contract_errors_are_500(serving, failure):
+    engine, _, client = serving
+    setattr(engine, failure, True)
+    response = await client.post(
+        "/rerank", json={"query": "q", "documents": ["doc"] * 126}
+    )
+    assert response.status_code == 500, response.text
+    assert "results" not in response.json()
+
+
+def test_plugin_startup_logs_use_native_handlers():
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from vllm.logger import configure_logging; "
+            "from vllm.config import LoggingConfig; "
+            "configure_logging(LoggingConfig()); "
+            "from jina_vllm.serving import logger; logger.info('plugin-log-receipt')",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "plugin-log-receipt" in result.stdout + result.stderr
