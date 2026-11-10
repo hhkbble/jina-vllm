@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=77,<81"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "jina-reranker-v35-vllm"
 version = "0.1.0"
@@ -12,10 +16,45 @@ dependencies = [
 dev = [
     "pytest>=8",
     "pytest-asyncio>=1",
-    "ruff>=0.14",
+    "ruff==0.14.0",
 ]
 
+[project.entry-points."vllm.general_plugins"]
+jina_reranker_v35 = "jina_vllm.plugin:register"
+
+[project.entry-points."vllm.endpoint_plugins"]
+jina_reranker_v35 = "jina_vllm.plugin:Jina35EndpointPlugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.uv]
-# Initialization only: add packaging and plugin entry points with implementation.
-package = false
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Aligned with the pinned vLLM revision; package paths adapted below.
+select = ["D", "E", "F", "UP", "B", "ISC", "SIM", "I", "G", "INP"]
+ignore = [
+    "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
+    "D205", "D209", "D301", "D400", "D401", "D404", "D415", "D203", "D213",
+    "F405", "F403", "E731", "B905", "B007", "UP032", "UP042",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"!src/jina_vllm/**" = ["INP"]
+"tests/**" = ["D417"]
+
+[tool.ruff.lint.pydocstyle]
+ignore-var-parameters = true
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["gpu: real model and GPU acceptance (explicit opt-in)"]

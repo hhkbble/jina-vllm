@@ -1,9 +1,8 @@
 # jina-reranker-v35-vllm
 
 Independent out-of-tree vLLM integration for `jinaai/jina-reranker-v3.5`.
-Current status: the repository and Python environment are initialized. Model
-classes, plugins, serving integration, and application tests are not yet
-implemented.
+Current status: implementation is in progress. The package and opt-in plugin
+entrypoints are installed; model and serving acceptance are pending.
 
 Local design documents and reports live in `docs/`, which is intentionally
 excluded from version control and is not included in a new clone. Coding-agent
@@ -33,7 +32,6 @@ and [uv environment variable reference](https://docs.astral.sh/uv/reference/envi
 existing model download can be reused.
 
 The design pins model and tokenizer revision
-`e8a93f33f0b22108f8c2364f8484ce3422552fbc`. Initialization does not download,
-modify, or execute the model. `model-reference.json` records the existing
+`e8a93f33f0b22108f8c2364f8484ce3422552fbc`. `model-reference.json` records the
 snapshot's file sizes and SHA-256 checksums. Environment details and setup checks
 are recorded locally in `docs/environment-initialization.md`.

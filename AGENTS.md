@@ -7,9 +7,8 @@ architecture changes, or validation planning. It defines the intended out-of-tre
 vLLM integration and acceptance criteria. Documents and reports live in `docs/`,
 which is deliberately ignored by Git; preserve existing local documents.
 
-The initialization request authorizes environment and repository setup only.
-Implementation starts after the user requests development. At that point,
-complete the authorized work autonomously without asking the user implementation
+Development and acceptance are authorized. Complete the work autonomously
+without asking the user implementation
 questions. Preserve the user's intent; when the design is demonstrably
 infeasible or unreasonable, make justified changes to implementation details and
 record the evidence and decision in `docs/`. When uncertain, delegate the specific
@@ -59,5 +58,7 @@ Keep machine-specific paths and investigation details in ignored `docs/` reports
 Commit completed, coherent development milestones rather than waiting until the
 end of implementation. Check the working tree and preserve unrelated changes.
 Run checks appropriate to each milestone and report what was actually verified.
+Run `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest`
+for code milestones. Real GPU acceptance is opt-in and runs separately.
 Distinguish environment/import checks from model, HTTP, numerical, and performance
 acceptance; only claim results supported by executed validation.
