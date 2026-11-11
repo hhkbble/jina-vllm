@@ -83,46 +83,73 @@ async def measure(args):
             for concurrency in args.concurrency:
                 semaphore = asyncio.Semaphore(concurrency)
                 peak = pynvml.nvmlDeviceGetMemoryInfo(gpu).used
-                stop = asyncio.Event()
-
-                async def monitor(stop=stop):
-                    nonlocal peak
-                    while not stop.is_set():
-                        peak = max(peak, pynvml.nvmlDeviceGetMemoryInfo(gpu).used)
-                        await asyncio.sleep(0.02)
 
                 async def limited(case, semaphore=semaphore):
                     async with semaphore:
                         return await request(case)
 
-                monitoring = asyncio.create_task(monitor())
-                start = time.perf_counter()
-                samples = await asyncio.gather(
-                    *[
+                await asyncio.gather(
+                    *(
                         limited(selected[i % len(selected)])
-                        for i in range(args.requests)
-                    ]
+                        for i in range(args.warmup_requests)
+                    )
                 )
-                elapsed = time.perf_counter() - start
-                stop.set()
-                await monitoring
+                stop = asyncio.Event()
+                gpu_samples = []
+                start = time.perf_counter()
+
+                async def monitor(stop=stop, gpu_samples=gpu_samples, start=start):
+                    while not stop.is_set():
+                        gpu_samples.append(
+                            dict(
+                                seconds=time.perf_counter() - start,
+                                memory_used_bytes=pynvml.nvmlDeviceGetMemoryInfo(
+                                    gpu
+                                ).used,
+                                gpu_util_percent=pynvml.nvmlDeviceGetUtilizationRates(
+                                    gpu
+                                ).gpu,
+                            )
+                        )
+                        await asyncio.sleep(0.02)
+
+                monitoring = asyncio.create_task(monitor())
+                try:
+                    samples = await asyncio.gather(
+                        *(
+                            limited(selected[i % len(selected)])
+                            for i in range(args.requests)
+                        )
+                    )
+                    elapsed = time.perf_counter() - start
+                finally:
+                    stop.set()
+                    await monitoring
                 latency = np.array([s["seconds"] for s in samples])
                 cell = dict(
                     workload=name,
                     concurrency=concurrency,
                     count=len(samples),
+                    avg_seconds=float(latency.mean()),
                     p50_seconds=float(np.median(latency)),
                     p95_seconds=float(np.percentile(latency, 95)),
                     requests_per_second=len(samples) / elapsed,
                     documents_per_second=sum(s["documents"] for s in samples) / elapsed,
                     prompt_tokens_per_second=sum(s["tokens"] for s in samples)
                     / elapsed,
-                    gpu_peak_device_bytes=peak,
+                    gpu_peak_device_bytes=max(
+                        [peak, *(s["memory_used_bytes"] for s in gpu_samples)]
+                    ),
+                    gpu_util_avg_percent=float(
+                        np.mean([s["gpu_util_percent"] for s in gpu_samples])
+                    ),
+                    gpu_samples=gpu_samples,
                     samples=samples,
                 )
                 cells.append(cell)
                 print(
-                    f"{name} c={concurrency}: p50 {cell['p50_seconds']:.4f}s "
+                    f"{name} c={concurrency}: avg {cell['avg_seconds']:.4f}s "
+                    f"p50 {cell['p50_seconds']:.4f}s "
                     f"p95 {cell['p95_seconds']:.4f}s",
                     flush=True,
                 )
@@ -132,10 +159,11 @@ async def measure(args):
         workload=str(args.workload),
         cells=cells,
         preprocessing=preprocessing,
+        warmup_requests_per_cell=args.warmup_requests,
         notes=(
-            "Warmup per input; 12 samples/cell by default, descriptive p95. "
-            "GPU memory includes other device users. Latency excludes client "
-            "semaphore waiting; server queueing included."
+            "Warmup per input plus optional concurrent warmup. NVML device "
+            "samples every 20 ms during timing, including other device users. "
+            "Latency excludes client semaphore waiting and includes server queueing."
         ),
     )
 
@@ -148,6 +176,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--concurrency", type=int, nargs="+", default=[1, 4, 8])
     parser.add_argument("--requests", type=int, default=12)
+    parser.add_argument("--warmup-requests", type=int, default=0)
     args = parser.parse_args()
     result = asyncio.run(measure(args))
     args.output.parent.mkdir(parents=True, exist_ok=True)
