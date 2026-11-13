@@ -74,8 +74,9 @@ applies.
 ### Pool-free FA2 prefill
 
 ```bash
-scripts/serve.sh bf16 --no-enable-chunked-prefill \
-  --max-model-len 16384 --max-num-batched-tokens 16384
+scripts/serve.sh bf16 --no-enable-chunked-prefill --no-enable-prefix-caching \
+  --max-model-len 131072 --max-num-batched-tokens 131072 \
+  --max-num-scheduled-tokens 131072 --long-prefill-token-threshold 0
 ```
 
 Jina v3.5 pooling on CUDA Model Runner V2 selects pool-free prefill automatically
@@ -93,14 +94,17 @@ validation still applies.
 
 Pool-free prefill uses the same rerank API, sliding windows and listwise
 processing. FP8 W8A8 Linear can be used with BF16 attention by passing `fp8`
-to the launcher. The RTX 5090 check covers complete prompts up to 16,384
-tokens, mixed-length batches, eager, and the default vLLM compile and
-piecewise CUDA Graph configuration. FA2 runs outside graph capture. Prompts
-whose official blocks exceed the configured context limit are rejected.
-In this check, the maximum single-block score differences from same-precision
+to the launcher. On RTX 5090, the BF16 service ran a formatted 131,072-token
+single block in one scheduler step with zero physical KV allocation. A
+131,073-token block returned HTTP 400 before scheduling. The earlier 16,384-token
+checks cover both Linear precisions, mixed-length batches, eager, and default
+vLLM compilation with piecewise CUDA Graphs. FA2 runs outside graph capture.
+In those checks, the maximum single-block score differences from same-precision
 paged FA2 were 0.00160 for BF16 Linear and 0.00563 for FP8 W8A8 Linear. The
 126-document, two-block FP8 case differed by up to 0.02277.
 Local design notes, commands and results are in `docs/pool-free-prefill.md`.
+For offline verification, pass `--pool-free` to `tools.compare_reference`
+with `--mode bf16` or `--mode fp8`.
 
 For wheel-only deployments, invoke `vllm serve` directly with
 `VLLM_PLUGINS=jina_reranker_v35` and these essential settings:

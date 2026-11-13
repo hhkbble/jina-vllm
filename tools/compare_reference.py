@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 from huggingface_hub import snapshot_download
 
-from jina_vllm.contract import MODEL_ID, REVISION
+from jina_vllm.contract import LAYER_TYPES, MAX_LENGTH, MODEL_ID, REVISION
 from jina_vllm.ranking import merge_request, prepare_request
 
 
@@ -30,15 +30,21 @@ def engine_kwargs(args):
         dtype="bfloat16",
         kv_cache_dtype="bfloat16",
         attention_config={"backend": "FLASH_ATTN", "flash_attn_version": 2},
-        max_model_len=131072,
+        max_model_len=MAX_LENGTH,
         max_num_batched_tokens=args.batch_tokens,
         max_num_seqs=4,
         gpu_memory_utilization=0.75,
-        enable_chunked_prefill=True,
+        enable_chunked_prefill=not args.pool_free,
         enable_prefix_caching=False,
         # No FlashInfer GEMM is used by these modes. Avoid unrelated autotuning.
         kernel_config={"enable_flashinfer_autotune": False},
     )
+    if args.pool_free:
+        options.update(
+            max_num_batched_tokens=MAX_LENGTH,
+            max_num_scheduled_tokens=MAX_LENGTH,
+            long_prefill_token_threshold=0,
+        )
     if args.mode == "fp8":
         options.update(
             quantization="fp8_per_channel",
@@ -126,12 +132,17 @@ def native_run(args, cases):
     start = time.perf_counter()
     llm = LLM(**engine_kwargs(args))
     metadata = llm.apply_model(inspect_model)[0]
+    if args.pool_free and (
+        len(metadata["attention"]) != len(LAYER_TYPES)
+        or any(layer["spec"] != "NoneType" for layer in metadata["attention"])
+    ):
+        raise RuntimeError("Expected pool-free attention on every layer")
     init_seconds = time.perf_counter() - start
     results = []
     for case in cases:
         start = time.perf_counter()
         plan = prepare_request(
-            [(case["query"], case["documents"])], llm.get_tokenizer(), 131072
+            [(case["query"], case["documents"])], llm.get_tokenizer(), MAX_LENGTH
         )
         preprocess = time.perf_counter() - start
         if args.profile and not results:
@@ -210,7 +221,9 @@ def hf_run(args, cases):
         scores = [0.0] * len(ranked)
         for item in ranked:
             scores[int(item["index"])] = float(item["relevance_score"])
-        plan = prepare_request([(case["query"], case["documents"])], tokenizer, 131072)
+        plan = prepare_request(
+            [(case["query"], case["documents"])], tokenizer, MAX_LENGTH
+        )
         assert ids == [list(b.prompt_token_ids) for b in plan.blocks]
         results.append(
             dict(
@@ -237,7 +250,14 @@ def main():
     parser.add_argument("--mode", choices=["hf", "bf16", "fp8"], required=True)
     parser.add_argument("--workload", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--batch-tokens", type=int, default=8192)
+    parser.add_argument(
+        "--batch-tokens", type=int, help="Paged token budget (default: 8192)"
+    )
+    parser.add_argument(
+        "--pool-free",
+        action="store_true",
+        help="Use native pool-free FA2 with a full-context scheduler budget",
+    )
     parser.add_argument("--profile", type=Path)
     parser.add_argument(
         "--native-quant-op",
@@ -251,6 +271,14 @@ def main():
     )
     parser.add_argument("--split", choices=["calibration", "heldout"])
     args = parser.parse_args()
+    if args.pool_free and (
+        args.mode == "hf" or args.batch_tokens not in (None, MAX_LENGTH)
+    ):
+        parser.error(
+            f"--pool-free requires a native mode and a {MAX_LENGTH}-token budget"
+        )
+    if args.batch_tokens is None:
+        args.batch_tokens = 8192
     cases = read_workload(args.workload)
     if args.split:
         cases = [case for case in cases if case.get("split") == args.split]
