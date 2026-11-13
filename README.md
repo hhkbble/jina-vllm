@@ -71,6 +71,34 @@ are quantized; embedding and projector stay BF16. No calibration dataset or
 separate quantized checkpoint is needed. The numerical gate failure above still
 applies.
 
+### Pool-free FA2 prefill
+
+```bash
+scripts/serve.sh bf16 --no-enable-chunked-prefill \
+  --max-model-len 16384 --max-num-batched-tokens 16384
+```
+
+Jina v3.5 pooling on CUDA Model Runner V2 selects pool-free prefill automatically
+when `FLASH_ATTN` and `flash_attn_version=2` are explicit, all layers resolve
+to FA2 with BF16 Q/K/V, and both chunked prefill and prefix caching are off.
+Use `--kv-cache-dtype bfloat16` or `auto` that resolves to BF16. Both the
+batch and effective scheduler token budgets must cover `max-model-len`, and
+any long-prefill threshold must allow the entire prompt in one step.
+
+The startup log reports the selected mode and, in pool-free mode, confirms
+zero KV cache tensors across all 28 layers. The default launcher settings,
+automatic attention backend selection, quantized KV, and configurations that
+require a KV pool retain native paged KV and log the reason. Native parameter
+validation still applies.
+
+Pool-free prefill uses the same rerank API, sliding windows and listwise
+processing. FP8 W8A8 Linear can be used with BF16 attention by passing `fp8`
+to the launcher. The RTX 5090 check covers complete prompts up to 16,384
+tokens, mixed-length batches, eager, and the default vLLM compile and
+piecewise CUDA Graph configuration. FA2 runs outside graph capture. Prompts
+whose official blocks exceed the configured context limit are rejected.
+Local design notes, commands and results are in `docs/pool-free-prefill.md`.
+
 For wheel-only deployments, invoke `vllm serve` directly with
 `VLLM_PLUGINS=jina_reranker_v35` and these essential settings:
 
@@ -182,6 +210,5 @@ uv run python -m tools.compare_reference --mode bf16 \
 Workload JSONL rows contain `id`, `query`, and `documents` (strings). Labeled
 acceptance additionally uses parallel integer `relevance` labels and a `split`
 of `calibration` or `heldout`. The built-in workload includes a long capacity
-probe; the local real-text workload stays outside Git. Current tests: 92 CPU
-checks pass; the six GPU receipt checks have five passes and one explicit FP8
-numerical-gate failure.
+probe; the local real-text workload stays outside Git. The original six GPU
+receipt checks have five passes and one explicit FP8 numerical-gate failure.

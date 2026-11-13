@@ -5,14 +5,24 @@
 from torch import nn
 from transformers import Qwen3Config
 from vllm.config import CacheConfig, VllmConfig
+from vllm.logger import init_logger
 from vllm.model_executor.layers.pooler import DispatchPooler
 from vllm.model_executor.layers.pooler.tokwise import TokenPooler
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.model_executor.models.jina import JinaForRanking, JinaForRankingPool
 from vllm.model_executor.models.qwen3 import Qwen3DecoderLayer, Qwen3Model
 from vllm.model_executor.models.utils import extract_layer_index, maybe_prefix
+from vllm.v1.worker.gpu.model_states.default import DefaultModelState
 
 from .contract import validate_model_contract
+from .prefill import (
+    PrefillModelState,
+    paged_kv_layer_reason,
+    paged_kv_reason,
+    replace_with_pool_free_attention,
+)
+
+logger = init_logger("vllm.jina_vllm.model")
 
 
 class Jina35DecoderLayer(Qwen3DecoderLayer):
@@ -53,9 +63,13 @@ class JinaRerankerV35(JinaForRanking):
         self.projector_dim = config.embedding_size
         self.vllm_config = vllm_config
         self.quant_config = vllm_config.quant_config
+        reason = paged_kv_reason(vllm_config)
+        if reason is not None:
+            logger.warning("Jina v3.5 attention mode: paged KV (%s)", reason)
         self.model = Jina35Backbone(
             vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model")
         )
+        self.pool_free_prefill = reason is None and self._enable_pool_free_prefill()
         self.projector = nn.Sequential(
             nn.Linear(config.hidden_size, config.hidden_size // 2, bias=False),
             nn.ReLU(),
@@ -64,3 +78,21 @@ class JinaRerankerV35(JinaForRanking):
         self.pooler = DispatchPooler(
             {"token_embed": TokenPooler(pooling=JinaForRankingPool(self.projector))}
         )
+
+    def get_model_state_cls(self) -> type[DefaultModelState]:
+        return PrefillModelState if self.pool_free_prefill else DefaultModelState
+
+    def _enable_pool_free_prefill(self) -> bool:
+        attentions = [layer.self_attn for layer in self.model.layers]
+        reason = paged_kv_layer_reason([module.attn for module in attentions])
+        if reason is not None:
+            logger.warning("Jina v3.5 attention mode: paged KV (%s)", reason)
+            return False
+        for module in attentions:
+            module.attn = replace_with_pool_free_attention(
+                module.attn, self.vllm_config
+            )
+        logger.info(
+            "Jina v3.5 attention mode: pool-free FA2 (BF16 full-prompt prefill)"
+        )
+        return True
