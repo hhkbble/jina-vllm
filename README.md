@@ -97,6 +97,9 @@ to the launcher. The RTX 5090 check covers complete prompts up to 16,384
 tokens, mixed-length batches, eager, and the default vLLM compile and
 piecewise CUDA Graph configuration. FA2 runs outside graph capture. Prompts
 whose official blocks exceed the configured context limit are rejected.
+In this check, the maximum single-block score differences from same-precision
+paged FA2 were 0.00160 for BF16 Linear and 0.00563 for FP8 W8A8 Linear. The
+126-document, two-block FP8 case differed by up to 0.02277.
 Local design notes, commands and results are in `docs/pool-free-prefill.md`.
 
 For wheel-only deployments, invoke `vllm serve` directly with
