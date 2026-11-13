@@ -6,7 +6,7 @@ import os
 import pytest
 import torch
 
-from jina_vllm.fp8_prefill import attend, attention_tile, interleaved_qkv, pack
+from jina_vllm.fp8_prefill import attend, attention_tile, pack
 
 pytestmark = [
     pytest.mark.gpu,
@@ -127,7 +127,6 @@ def test_fp8_prefill_matches_independent_oracles(window, tile_p, fused):
     v *= torch.rand((tokens, 8, 1), device="cuda") ** 2
     if not fused:
         q, k = q.contiguous(), k.contiguous()
-    assert interleaved_qkv(q, k, v) == fused
     out, packed, n = run_attention((q, k, v), lengths, window, tile_p)
     expected = policy_oracle(packed, lengths, window, n, tile_p)
     original = oracle(q, k, v, lengths, window)
@@ -177,9 +176,6 @@ def test_fused_qkv_views_pack_like_independent_inputs():
         6144,
         7168,
     )
-    assert interleaved_qkv(q, k, v)
-    assert not interleaved_qkv(q, k, qkv[:-2, 24:])
-    assert not interleaved_qkv(q, k, v.clone())
     data, scales = pack(q, k, v)
     separate_data, separate_scales = pack(q.contiguous(), k.contiguous(), v)
     torch.testing.assert_close(

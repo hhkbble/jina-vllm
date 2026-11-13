@@ -1,4 +1,4 @@
-"""Causal FA2 over packed, complete prompts on vLLM Model Runner V2."""
+"""Causal attention over packed, complete prompts on vLLM Model Runner V2."""
 
 from dataclasses import dataclass
 
@@ -10,10 +10,6 @@ from vllm.logger import init_logger
 from vllm.model_executor.layers.attention import Attention
 from vllm.platforms import current_platform
 from vllm.v1.attention.backend import AttentionCGSupport
-from vllm.v1.attention.backends.flash_attn import (
-    FlashAttentionBackend,
-    FlashAttentionImpl,
-)
 from vllm.v1.attention.backends.registry import AttentionBackendEnum
 from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.worker.gpu.block_table import BlockTables
@@ -25,6 +21,15 @@ from vllm.v1.worker.utils import AttentionGroup
 from .config import FP8_PREFILL_BACKEND, FP8PrefillMode
 
 logger = init_logger("vllm.jina_vllm.prefill")
+
+
+def __getattr__(name: str):
+    # Older local validation scripts import these BF16 implementations here.
+    if name in ("PrefillImpl", "PrefillBackend"):
+        from . import fa2_prefill
+
+        return getattr(fa2_prefill, name)
+    raise AttributeError(name)
 
 
 def paged_kv_reason(
@@ -95,6 +100,11 @@ def paged_kv_reason(
 
 
 def paged_kv_layer_reason(layers: list[Attention]) -> str | None:
+    from vllm.v1.attention.backends.flash_attn import (
+        FlashAttentionBackend,
+        FlashAttentionImpl,
+    )
+
     if any(
         layer.get_attn_backend() is not FlashAttentionBackend
         or type(layer.impl) is not FlashAttentionImpl
@@ -206,49 +216,6 @@ def run_packed_prefill(
     return output
 
 
-class PrefillImpl(FlashAttentionImpl):
-    def forward(
-        self,
-        layer: torch.nn.Module,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
-        kv_cache: torch.Tensor,
-        attn_metadata: PrefillMetadata | None,
-        output: torch.Tensor,
-        output_scale: torch.Tensor | None = None,
-        output_block_scale: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        return run_packed_prefill(
-            self._attend, query, key, value, attn_metadata, output
-        )
-
-    def _attend(self, q, k, v, metadata: PrefillMetadata, output):
-        from vllm.vllm_flash_attn import flash_attn_varlen_func
-
-        flash_attn_varlen_func(
-            q=q,
-            k=k,
-            v=v,
-            out=output,
-            cu_seqlens_q=metadata.offsets,
-            cu_seqlens_k=metadata.offsets,
-            max_seqlen_q=metadata.max_seq_len,
-            max_seqlen_k=metadata.max_seq_len,
-            softmax_scale=self.scale,
-            causal=True,
-            window_size=self.sliding_window,
-            fa_version=2,
-            num_splits=1 if self.batch_invariant_enabled else 0,
-        )
-
-
-class PrefillBackend(FlashAttentionBackend):
-    @staticmethod
-    def get_impl_cls() -> type[PrefillImpl]:
-        return PrefillImpl
-
-
 class PrefillAttention(Attention):
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> None:
         return None
@@ -261,6 +228,8 @@ def replace_with_pool_free_attention(
     # Qwen3. Replace its layer with one that contributes no KV spec.
     backend = layer.get_attn_backend()
     if mode is None:
+        from .fa2_prefill import PrefillBackend
+
         backend = PrefillBackend
     elif backend.get_name() != FP8_PREFILL_BACKEND:
         raise ValueError(

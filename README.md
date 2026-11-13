@@ -145,7 +145,10 @@ activation-quant and norm-quant fusion disabled. Native
 overrides the QK default. The same keys can be passed in the offline
 `compilation_config`. FP8 attention runs between piecewise graph segments.
 
-The FP8 modes are experimental. RTX 5090 (SM120) is the runtime-tested device.
+The FP8 modes are experimental. On RTX 5090, four offline latency cases
+showed a 1.13–1.19× geometric mean speedup against same-Linear pool-free FA2.
+All four FP8-attention/Linear combinations exceeded the frozen score and
+vector error budgets. RTX 5090 (SM120) is the runtime-tested device.
 The kernel also has E4M3 compiler receipts for SM89, SM90, SM100, SM103 and
 SM121. Those devices still need runtime, model and performance validation.
 See local `docs/pool-free-fp8-acceptance.md` for score gates and measurements.

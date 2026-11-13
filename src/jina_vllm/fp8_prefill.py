@@ -60,36 +60,6 @@ def _pack(Q, K, V, Packed, Scales, T, QS, KS, VS, R: tl.constexpr):
     tl.store(Scales + dst, scale, valid)
 
 
-@triton.jit
-def _pack_qkv(Q, Packed, Scales, T, R: tl.constexpr):
-    # The fused Q/K norm and RoPE output is a single interleaved QKV matrix.
-    idx = tl.program_id(0) * R + tl.arange(0, R)
-    token = idx // 32
-    head = idx % 32
-    dim = tl.arange(0, 128)
-    valid = token < T
-    x = tl.load(Q + idx[:, None] * 128 + dim[None, :], valid[:, None], 0)
-    quantized, scale = _quantize_heads(x.to(tl.float32))
-
-    # Store the three projections in separate planes of the same allocation.
-    kv_row = token * 8 + head % 8
-    dst = tl.where(head < 16, token * 16 + head, T * 16 + kv_row)
-    dst += tl.where(head >= 24, T * 8, 0)
-    tl.store(Packed + dst[:, None] * 128 + dim[None, :], quantized, valid[:, None])
-    tl.store(Scales + dst, scale, valid)
-
-
-def interleaved_qkv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> bool:
-    return (
-        q.stride() == k.stride() == v.stride() == (4096, 128, 1)
-        and k.data_ptr() == q.data_ptr() + 2048 * q.element_size()
-        and v.data_ptr() == q.data_ptr() + 3072 * q.element_size()
-        and q.untyped_storage().data_ptr()
-        == k.untyped_storage().data_ptr()
-        == v.untyped_storage().data_ptr()
-    )
-
-
 def pack(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -98,25 +68,22 @@ def pack(
     packed = torch.empty((tokens * 32, 128), device=q.device, dtype=torch.float8_e4m3fn)
     scales = torch.empty(tokens * 32, device=q.device, dtype=torch.float32)
     rows = 32
-    if interleaved_qkv(q, k, v):
-        _pack_qkv[(triton.cdiv(tokens * 32, rows),)](
-            q, packed, scales, tokens, rows, num_warps=4
-        )
-    else:
-        blocks = triton.cdiv(tokens * 16, rows) + 2 * triton.cdiv(tokens * 8, rows)
-        _pack[(blocks,)](
-            q,
-            k,
-            v,
-            packed,
-            scales,
-            tokens,
-            q.stride(0),
-            k.stride(0),
-            v.stride(0),
-            rows,
-            num_warps=4,
-        )
+    # The same stride-aware kernel handles interleaved fused QKV and
+    # unfused Q/K with strided V. Allocate the three planes together.
+    blocks = triton.cdiv(tokens * 16, rows) + 2 * triton.cdiv(tokens * 8, rows)
+    _pack[(blocks,)](
+        q,
+        k,
+        v,
+        packed,
+        scales,
+        tokens,
+        q.stride(0),
+        k.stride(0),
+        v.stride(0),
+        rows,
+        num_warps=4,
+    )
     return packed, scales
 
 
