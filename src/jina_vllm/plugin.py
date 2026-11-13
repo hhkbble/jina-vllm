@@ -7,7 +7,13 @@ def register() -> None:
 
     allowed = envs.VLLM_PLUGINS
     if allowed is not None and PLUGIN_NAME in allowed:
+        from vllm.model_executor.models.config import MODELS_CONFIG_MAP
+
+        from .config import Jina35Config, register_prefill_modes
+
         ModelRegistry.register_model(ARCH, "jina_vllm.model:JinaRerankerV35")
+        MODELS_CONFIG_MAP[ARCH] = Jina35Config
+        register_prefill_modes()
 
 
 class Jina35EndpointPlugin:

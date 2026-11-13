@@ -22,10 +22,14 @@ from vllm.v1.worker.gpu.model_states.default import DefaultModelState
 from vllm.v1.worker.gpu.model_states.interface import ModelSpecificAttnMetadata
 from vllm.v1.worker.utils import AttentionGroup
 
+from .config import FP8_PREFILL_BACKEND, FP8PrefillMode
+
 logger = init_logger("vllm.jina_vllm.prefill")
 
 
-def paged_kv_reason(config: VllmConfig) -> str | None:
+def paged_kv_reason(
+    config: VllmConfig, mode: FP8PrefillMode | None = None
+) -> str | None:
     model = config.model_config
     scheduler = config.scheduler_config
     cache = config.cache_config
@@ -35,10 +39,11 @@ def paged_kv_reason(config: VllmConfig) -> str | None:
         return "NVIDIA CUDA and Model Runner V2 are required"
     if model.runner_type != "pooling":
         return "the runner is not pooling"
-    if cache.cache_dtype not in ("auto", "bfloat16"):
+    if mode is None and cache.cache_dtype not in ("auto", "bfloat16"):
         return f"kv-cache-dtype={cache.cache_dtype} was selected"
-    if attention.backend != AttentionBackendEnum.FLASH_ATTN or (
-        attention.flash_attn_version != 2
+    if mode is None and (
+        attention.backend != AttentionBackendEnum.FLASH_ATTN
+        or attention.flash_attn_version != 2
     ):
         return "FLASH_ATTN and flash_attn_version=2 must both be explicit"
     if attention.use_non_causal:
@@ -105,6 +110,27 @@ def paged_kv_layer_reason(layers: list[Attention]) -> str | None:
     return None
 
 
+def fp8_prefill_reason(config: VllmConfig) -> str | None:
+    from .fp8_prefill import FP8_DEVICE_CAPABILITIES
+
+    capability = current_platform.get_device_capability(torch.cuda.current_device())
+    if capability not in FP8_DEVICE_CAPABILITIES:
+        return f"CUDA device capability {capability} is outside the FP8 MMA targets"
+    if envs.VLLM_BATCH_INVARIANT:
+        return "VLLM_BATCH_INVARIANT is unsupported by JINA_FP8_PREFILL"
+    if config.cache_config.kv_offloading_size is not None:
+        return "kv-offloading-size was configured"
+    if config.cache_config.kv_cache_dtype_skip_layers:
+        return "kv-cache-dtype-skip-layers was configured"
+    quantization = config.model_config.quantization
+    if quantization is not None and (
+        quantization != "fp8_per_channel"
+        or config.kernel_config.linear_backend != "cutlass"
+    ):
+        return "Linear must be BF16 or use fp8_per_channel with the CUTLASS backend"
+    return None
+
+
 @dataclass(frozen=True)
 class PrefillMetadata:
     offsets: torch.Tensor
@@ -114,7 +140,7 @@ class PrefillMetadata:
 
 class PrefillModelState(DefaultModelState):
     def get_additional_cg_support(self) -> tuple[AttentionCGSupport, str]:
-        return AttentionCGSupport.NEVER, "Jina v3.5 pool-free FA2"
+        return AttentionCGSupport.NEVER, "Jina v3.5 pool-free attention"
 
     def initialize_kv_cache(
         self, kv_cache_config: KVCacheConfig, block_tables: BlockTables
@@ -128,7 +154,7 @@ class PrefillModelState(DefaultModelState):
         ):
             raise RuntimeError("Jina v3.5 pool-free prefill received a KV pool")
         logger.info(
-            "Jina v3.5 pool-free FA2 allocation: kv_cache_tensors=0, "
+            "Jina v3.5 pool-free prefill allocation: kv_cache_tensors=0, "
             "kv_cache_groups=0, layer_kv_elements=0 (%d layers)",
             len(layers),
         )
@@ -145,7 +171,7 @@ class PrefillModelState(DefaultModelState):
             input_batch.num_computed_tokens_np.any()
             or (input_batch.num_scheduled_tokens != input_batch.prefill_len_np).any()
         ):
-            raise RuntimeError("Jina v3.5 pool-free FA2 requires complete prompts")
+            raise RuntimeError("Jina v3.5 pool-free prefill requires complete prompts")
 
     def prepare_attn(
         self,
@@ -167,6 +193,19 @@ class PrefillModelState(DefaultModelState):
         return dict.fromkeys(self.layer_names, metadata)
 
 
+def run_packed_prefill(
+    attend, query, key, value, metadata: PrefillMetadata | None, output
+) -> torch.Tensor:
+    if metadata is None:
+        return output.zero_()  # Native profile may skip attention metadata.
+    tokens = metadata.num_tokens
+    attend(query[:tokens], key[:tokens], value[:tokens], metadata, output[:tokens])
+    # Piecewise graphs can pad the backbone beyond the real attention rows.
+    if tokens < output.shape[0]:
+        output[tokens:].zero_()
+    return output
+
+
 class PrefillImpl(FlashAttentionImpl):
     def forward(
         self,
@@ -180,30 +219,28 @@ class PrefillImpl(FlashAttentionImpl):
         output_scale: torch.Tensor | None = None,
         output_block_scale: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        return run_packed_prefill(
+            self._attend, query, key, value, attn_metadata, output
+        )
+
+    def _attend(self, q, k, v, metadata: PrefillMetadata, output):
         from vllm.vllm_flash_attn import flash_attn_varlen_func
 
-        if attn_metadata is None:
-            return output.zero_()  # Native profile may skip attention metadata.
-        num_tokens = attn_metadata.num_tokens
         flash_attn_varlen_func(
-            q=query[:num_tokens],
-            k=key[:num_tokens],
-            v=value[:num_tokens],
-            out=output[:num_tokens],
-            cu_seqlens_q=attn_metadata.offsets,
-            cu_seqlens_k=attn_metadata.offsets,
-            max_seqlen_q=attn_metadata.max_seq_len,
-            max_seqlen_k=attn_metadata.max_seq_len,
+            q=q,
+            k=k,
+            v=v,
+            out=output,
+            cu_seqlens_q=metadata.offsets,
+            cu_seqlens_k=metadata.offsets,
+            max_seqlen_q=metadata.max_seq_len,
+            max_seqlen_k=metadata.max_seq_len,
             softmax_scale=self.scale,
             causal=True,
             window_size=self.sliding_window,
             fa_version=2,
             num_splits=1 if self.batch_invariant_enabled else 0,
         )
-        # Piecewise graphs can pad the backbone beyond the real FA2 rows.
-        if num_tokens < output.shape[0]:
-            output[num_tokens:].zero_()
-        return output
 
 
 class PrefillBackend(FlashAttentionBackend):
@@ -217,10 +254,18 @@ class PrefillAttention(Attention):
         return None
 
 
-def replace_with_pool_free_attention(layer: Attention, config: VllmConfig) -> Attention:
-    # The native layer already selected and validated its backend. Replace only
-    # its attention core, keeping Qwen3 projections and the native compiled ops.
-    # The native KV update op is a no-op when a layer has no slot mapping.
+def replace_with_pool_free_attention(
+    layer: Attention, config: VllmConfig, mode: FP8PrefillMode | None
+) -> Attention:
+    # Retain the native compiled op and the backend already selected by
+    # Qwen3. Replace its layer with one that contributes no KV spec.
+    backend = layer.get_attn_backend()
+    if mode is None:
+        backend = PrefillBackend
+    elif backend.get_name() != FP8_PREFILL_BACKEND:
+        raise ValueError(
+            f"Layer {layer.layer_name} did not select {FP8_PREFILL_BACKEND}"
+        )
     del config.compilation_config.static_forward_context[layer.layer_name]
     return PrefillAttention(
         layer.num_heads,
@@ -231,5 +276,5 @@ def replace_with_pool_free_attention(layer: Attention, config: VllmConfig) -> At
         quant_config=layer.quant_config,
         per_layer_sliding_window=layer.sliding_window,
         prefix=layer.layer_name,
-        attn_backend=PrefillBackend,
+        attn_backend=backend,
     )

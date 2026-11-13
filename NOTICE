@@ -5,6 +5,8 @@ Copyright contributors to the vLLM project; Apache License 2.0.
 https://github.com/vllm-project/vllm/blob/4ba787ec9959e566d3b587a796dff07673324da5/vllm/model_executor/models/jina.py
 Request generator preparation and indexed asynchronous merging adapt the same
 project's pooling/base/serving.py and utils/async_utils.py under that license.
+Pool-free FP8 prefill reuses vLLM's Triton sequence lookup from
+vllm/v1/attention/ops/triton_attention_helpers.py at the same revision.
 
 The request template, truncation, chunking and query-vector fusion are adapted
 from Jina AI's jina-reranker-v3.5 modeling.py at the fixed revision below:

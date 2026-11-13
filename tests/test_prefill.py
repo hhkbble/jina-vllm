@@ -3,16 +3,20 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
-from vllm.config import AttentionConfig, CacheConfig, SchedulerConfig
+from vllm.config import AttentionConfig, CacheConfig, SchedulerConfig, VllmConfig
+from vllm.config.cache import get_kv_cache_dtype_handler
 from vllm.config.compilation import CompilationConfig, CUDAGraphMode
 from vllm.v1.attention.backends.flash_attn import (
     FlashAttentionBackend,
     FlashAttentionImpl,
 )
 from vllm.v1.attention.backends.registry import AttentionBackendEnum
+from vllm.v1.kv_cache_interface import KVQuantMode
 
+from jina_vllm.config import Jina35Config, fp8_prefill_mode, register_prefill_modes
 from jina_vllm.prefill import (
     PrefillModelState,
+    fp8_prefill_reason,
     paged_kv_layer_reason,
     paged_kv_reason,
 )
@@ -97,6 +101,90 @@ def test_pool_free_checks_every_resolved_layer():
     other = SimpleNamespace(**vars(layer))
     other.impl = other_impl
     assert "native FA2" in paged_kv_layer_reason([layer, other])
+
+
+@pytest.mark.parametrize(
+    "mode", ["fp8_per_token_head_p_row", "fp8_per_token_head_p_tile"]
+)
+def test_explicit_fp8_config_and_fusion_defaults(monkeypatch, mode):
+    register_prefill_modes()
+    cache = CacheConfig(cache_dtype=mode)
+    handler = get_kv_cache_dtype_handler(mode)
+    assert handler.quant_mode() == KVQuantMode.NONE
+    assert handler.torch_dtype() == torch.bfloat16
+    assert fp8_prefill_mode(cache.cache_dtype) == mode
+    monkeypatch.setattr("jina_vllm.config.current_platform.is_cuda_alike", lambda: True)
+    compilation = CompilationConfig(pass_config={"fuse_norm_quant": True})
+    config = SimpleNamespace(
+        model_config=SimpleNamespace(enforce_eager=False),
+        compilation_config=compilation,
+    )
+    Jina35Config.verify_and_update_config(config)
+    assert compilation.pass_config.enable_qk_norm_rope_fusion is True
+    assert compilation.pass_config.fuse_act_quant is False
+    assert compilation.pass_config.fuse_norm_quant is True
+    assert "+rotary_embedding" in compilation.custom_ops
+
+
+@pytest.mark.parametrize(
+    "backend,dtype,architecture,error",
+    [
+        ("JINA_FP8_PREFILL", "bfloat16", "JinaRerankerV35", "requires kv-cache-dtype"),
+        ("FLASH_ATTN", "fp8_per_token_head_p_row", "JinaRerankerV35", "requires JINA"),
+        (
+            "JINA_FP8_PREFILL",
+            "fp8_per_token_head_p_tile",
+            "Other",
+            "requires JinaRerankerV35",
+        ),
+    ],
+)
+def test_registered_fp8_selection_rejects_invalid_pair(
+    backend, dtype, architecture, error
+):
+    register_prefill_modes()
+    config = SimpleNamespace(
+        model_config=SimpleNamespace(architecture=architecture),
+        cache_config=CacheConfig(cache_dtype=dtype),
+        attention_config=AttentionConfig(backend=backend),
+    )
+    with pytest.raises(ValueError, match=error):
+        VllmConfig.try_verify_and_update_config(config)
+
+
+def test_explicitly_disabled_qk_fusion_and_missing_fp8_option(monkeypatch):
+    monkeypatch.setattr("jina_vllm.config.current_platform.is_cuda_alike", lambda: True)
+    compilation = CompilationConfig(
+        pass_config={"enable_qk_norm_rope_fusion": False, "fuse_act_quant": True}
+    )
+    config = SimpleNamespace(compilation_config=compilation)
+    Jina35Config.verify_and_update_config(config)
+    assert fp8_prefill_mode("fp8_per_token_head") is None
+    assert compilation.pass_config.enable_qk_norm_rope_fusion is False
+    assert compilation.pass_config.fuse_act_quant is True
+    assert compilation.pass_config.fuse_norm_quant is False
+    assert "+rotary_embedding" not in compilation.custom_ops
+
+
+def test_fp8_prefill_checks_device_and_linear_backend(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 3)
+    capability = (8, 0)
+    monkeypatch.setattr(
+        "jina_vllm.prefill.current_platform.get_device_capability",
+        lambda device_id: capability if device_id == 3 else None,
+    )
+    config = SimpleNamespace(
+        model_config=SimpleNamespace(quantization=None),
+        kernel_config=SimpleNamespace(linear_backend="auto"),
+        cache_config=CacheConfig(),
+    )
+    assert "FP8 MMA" in fp8_prefill_reason(config)
+    capability = (8, 9)
+    assert fp8_prefill_reason(config) is None
+    config.model_config.quantization = "fp8_per_channel"
+    assert "CUTLASS" in fp8_prefill_reason(config)
+    config.kernel_config.linear_backend = "cutlass"
+    assert fp8_prefill_reason(config) is None
 
 
 def test_model_state_uses_only_real_sequence_boundaries():

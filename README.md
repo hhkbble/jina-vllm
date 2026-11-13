@@ -106,6 +106,50 @@ Local design notes, commands and results are in `docs/pool-free-prefill.md`.
 For offline verification, pass `--pool-free` to `tools.compare_reference`
 with `--mode bf16` or `--mode fp8`.
 
+### Pool-free FP8 prefill
+
+```bash
+source scripts/env.sh
+scripts/serve.sh bf16 --attention-backend JINA_FP8_PREFILL \
+  --kv-cache-dtype fp8_per_token_head_p_row \
+  --no-enable-chunked-prefill --no-enable-prefix-caching \
+  --max-model-len 131072 --max-num-batched-tokens 131072 \
+  --max-num-scheduled-tokens 131072 --long-prefill-token-threshold 0
+```
+
+Select either `fp8_per_token_head_p_row` or `fp8_per_token_head_p_tile`.
+Both values require `JINA_FP8_PREFILL`, and that backend accepts only those
+two values. For offline use, pass the same strings as
+`LLM(attention_backend="JINA_FP8_PREFILL", kv_cache_dtype=...)` with the
+same full-prompt settings. Enable the plugin through
+`VLLM_PLUGINS=jina_reranker_v35` before constructing the LLM.
+`tools.compare_reference --pool-free --kv-cache-dtype <mode>` also sets the
+backend and full-context budgets.
+
+The FP8 backend requires the Jina v3.5 architecture, NVIDIA CUDA Model Runner
+V2, BF16 activations and complete prompts in one scheduler step. It quantizes
+Q/K/V per token and head for each forward, uses E4M3 for both attention dot
+products and returns BF16. Both modes contribute zero physical KV cache.
+Standard KV dtype values retain their native meaning. Use
+`scripts/serve.sh fp8` with the same attention flags for W8A8 Linear with
+`fp8_per_channel` and CUTLASS.
+
+The row mode scales the probability numerator per query row and KV tile.
+The tile mode shares a scale across each KV head's tile. Causal and window
+masks still zero excluded weights. In tile mode, a masked column in the same
+tile can affect the rounding of the included columns through the shared scale.
+
+On the compiled Jina path, QK Norm+RoPE fusion defaults to enabled, with
+activation-quant and norm-quant fusion disabled. Native
+`--compilation-config '{"pass_config":{"enable_qk_norm_rope_fusion":false}}'`
+overrides the QK default. The same keys can be passed in the offline
+`compilation_config`. FP8 attention runs between piecewise graph segments.
+
+The FP8 modes are experimental. RTX 5090 (SM120) is the runtime-tested device.
+The kernel also has E4M3 compiler receipts for SM89, SM90, SM100, SM103 and
+SM121. Those devices still need runtime, model and performance validation.
+See local `docs/pool-free-fp8-acceptance.md` for score gates and measurements.
+
 For wheel-only deployments, invoke `vllm serve` directly with
 `VLLM_PLUGINS=jina_reranker_v35` and these essential settings:
 

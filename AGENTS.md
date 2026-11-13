@@ -6,8 +6,11 @@ Read `docs/jina-reranker-v35-vllm-out-of-tree-design.md` before implementation,
 architecture changes, or validation planning. It defines the intended out-of-tree
 vLLM integration and acceptance criteria. Documents and reports live in `docs/`,
 which is deliberately ignored by Git; preserve existing local documents.
-For changes to pool-free FA2 prefill, also read `docs/pool-free-prefill.md` for
+For changes to pool-free prefill, also read `docs/pool-free-prefill.md` for
 the pinned V2 runner contracts and GPU verification commands.
+For `JINA_FP8_PREFILL`, see `docs/pool-free-fp8-design-plan.md` and
+`docs/pool-free-fp8-acceptance.md`. Run the independent CUDA oracle with
+`JINA_RUN_FP8_PREFILL_TESTS=1 uv run pytest tests/test_fp8_prefill_gpu.py`.
 
 For authorized development, complete implementation and acceptance autonomously
 without asking the user implementation questions. Preserve the user's intent; when the design is demonstrably

@@ -22,7 +22,6 @@ common_args=(
     --pooler-config '{"task":"token_embed"}'
     --dtype bfloat16
     --kv-cache-dtype bfloat16
-    --attention-config '{"backend":"FLASH_ATTN","flash_attn_version":2}'
     --tensor-parallel-size 1
     --pipeline-parallel-size 1
     --max-model-len 131072
@@ -33,6 +32,16 @@ common_args=(
     --no-enable-prefix-caching
     --disable-flashinfer-autotune
 )
+attention_args=(--attention-config '{"backend":"FLASH_ATTN","flash_attn_version":2}')
+for arg in "$@"; do
+    case "$arg" in
+        --attention-backend|--attention-backend=*|--attention-config|--attention-config=*|-ac|-ac.*|--attention-config.*)
+            attention_args=()
+            break
+            ;;
+    esac
+done
+common_args+=("${attention_args[@]}")
 if [[ "$mode" == fp8 ]]; then
     common_args+=(
         --quantization fp8_per_channel

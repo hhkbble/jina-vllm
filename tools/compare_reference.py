@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 from huggingface_hub import snapshot_download
 
+from jina_vllm.config import FP8_PREFILL_BACKEND, FP8_PREFILL_MODES
 from jina_vllm.contract import LAYER_TYPES, MAX_LENGTH, MODEL_ID, REVISION
 from jina_vllm.ranking import merge_request, prepare_request
 
@@ -28,7 +29,7 @@ def engine_kwargs(args):
         hf_overrides={"architectures": ["JinaRerankerV35"], "embedding_size": 512},
         pooler_config={"task": "token_embed"},
         dtype="bfloat16",
-        kv_cache_dtype="bfloat16",
+        kv_cache_dtype=getattr(args, "kv_cache_dtype", None) or "bfloat16",
         attention_config={"backend": "FLASH_ATTN", "flash_attn_version": 2},
         max_model_len=MAX_LENGTH,
         max_num_batched_tokens=args.batch_tokens,
@@ -45,6 +46,9 @@ def engine_kwargs(args):
             max_num_scheduled_tokens=MAX_LENGTH,
             long_prefill_token_threshold=0,
         )
+    if getattr(args, "kv_cache_dtype", None):
+        del options["attention_config"]
+        options["attention_backend"] = FP8_PREFILL_BACKEND
     if args.mode == "fp8":
         options.update(
             quantization="fp8_per_channel",
@@ -137,6 +141,12 @@ def native_run(args, cases):
         or any(layer["spec"] != "NoneType" for layer in metadata["attention"])
     ):
         raise RuntimeError("Expected pool-free attention on every layer")
+    if args.kv_cache_dtype and any(
+        layer["backend"] != FP8_PREFILL_BACKEND
+        or layer["kv_dtype"] != args.kv_cache_dtype
+        for layer in metadata["attention"]
+    ):
+        raise RuntimeError("Expected the selected FP8 backend and dtype on every layer")
     init_seconds = time.perf_counter() - start
     results = []
     for case in cases:
@@ -172,7 +182,11 @@ def native_run(args, cases):
         )
         print(f"Completed {args.mode} {case['id']}: {seconds:.3f}s", flush=True)
     return dict(
-        mode=args.mode, metadata=metadata, init_seconds=init_seconds, results=results
+        mode=args.mode,
+        kv_cache_dtype=args.kv_cache_dtype or "bfloat16",
+        metadata=metadata,
+        init_seconds=init_seconds,
+        results=results,
     )
 
 
@@ -256,7 +270,12 @@ def main():
     parser.add_argument(
         "--pool-free",
         action="store_true",
-        help="Use native pool-free FA2 with a full-context scheduler budget",
+        help="Use pool-free attention with a full-context scheduler budget",
+    )
+    parser.add_argument(
+        "--kv-cache-dtype",
+        choices=FP8_PREFILL_MODES,
+        help="Select a Jina FP8 prefill mode with --pool-free",
     )
     parser.add_argument("--profile", type=Path)
     parser.add_argument(
@@ -271,6 +290,8 @@ def main():
     )
     parser.add_argument("--split", choices=["calibration", "heldout"])
     args = parser.parse_args()
+    if args.kv_cache_dtype and not args.pool_free:
+        parser.error("--kv-cache-dtype requires --pool-free")
     if args.pool_free and (
         args.mode == "hf" or args.batch_tokens not in (None, MAX_LENGTH)
     ):
