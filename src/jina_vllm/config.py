@@ -7,6 +7,7 @@ from vllm.config.cache import register_kv_cache_dtype
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 from vllm.v1.kv_cache_interface import KVQuantMode
 
+from .embeddings_v5_text_small import ARCH as EMBEDDINGS_V5_TEXT_SMALL_ARCH
 from .reranker_v35.contract import ARCH as RERANKER_V35_ARCH
 
 FP8PrefillMode = Literal["fp8_per_token_head_p_row", "fp8_per_token_head_p_tile"]
@@ -14,7 +15,9 @@ FP8_P_ROW = "fp8_per_token_head_p_row"
 FP8_P_TILE = "fp8_per_token_head_p_tile"
 FP8_PREFILL_MODES = (FP8_P_ROW, FP8_P_TILE)
 FP8_PREFILL_BACKEND = "JINA_FP8_PREFILL"
-FP8_PREFILL_ARCHITECTURES = frozenset({RERANKER_V35_ARCH})
+FP8_PREFILL_ARCHITECTURES = frozenset(
+    {RERANKER_V35_ARCH, EMBEDDINGS_V5_TEXT_SMALL_ARCH}
+)
 
 
 def restore_fp8_backend() -> AttentionBackendEnum:

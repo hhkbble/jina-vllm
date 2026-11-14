@@ -5,8 +5,10 @@ from vllm.model_executor.models.jina import JinaEmbeddingsV5DecoderModel
 from vllm.v1.attention.backend import AttentionType
 from vllm.v1.worker.gpu.model_states.default import DefaultModelState
 
+from jina_vllm.config import fp8_prefill_mode
 from jina_vllm.prefill import (
     PrefillModelState,
+    fp8_prefill_reason,
     install_pool_free_attention,
     paged_kv_reason,
 )
@@ -45,7 +47,12 @@ def validate_model_contract(vllm_config: VllmConfig) -> None:
 class JinaEmbeddingsV5TextSmall(JinaEmbeddingsV5DecoderModel):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         validate_model_contract(vllm_config)
-        reason = paged_kv_reason(vllm_config)
+        mode = fp8_prefill_mode(vllm_config.cache_config.cache_dtype)
+        reason = paged_kv_reason(vllm_config, mode)
+        if mode is not None:
+            reason = reason or fp8_prefill_reason(vllm_config)
+            if reason is not None:
+                raise ValueError(f"{mode} requires pool-free prefill: {reason}")
         super().__init__(vllm_config=vllm_config, prefix=prefix)
 
         if reason is None:
@@ -60,10 +67,12 @@ class JinaEmbeddingsV5TextSmall(JinaEmbeddingsV5DecoderModel):
                 raise ValueError(
                     "Text Small requires full causal attention and equal K/V head sizes"
                 )
-            reason = install_pool_free_attention(attentions, vllm_config, None)
+            reason = install_pool_free_attention(attentions, vllm_config, mode)
         self.pool_free_prefill = reason is None
         if self.pool_free_prefill:
-            logger.info("Jina Text Small attention mode: pool-free FA2 BF16")
+            logger.info(
+                "Jina Text Small attention mode: pool-free %s", mode or "FA2 BF16"
+            )
         else:
             logger.warning("Jina Text Small attention mode: paged KV (%s)", reason)
 

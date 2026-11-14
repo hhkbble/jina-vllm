@@ -107,7 +107,8 @@ native embedding API, task adapter loader, and LAST pooler.
 export VLLM_PLUGINS=jina_vllm VLLM_USE_V2_MODEL_RUNNER=1
 embedding_pool_free_hf='{"architectures":["JinaEmbeddingsV5TextSmall"],"jina_task":"retrieval","matryoshka_dimensions":[32,64,128,256,512,768,1024]}'
 embedding_pool_free=(
-  --no-enable-chunked-prefill --max-num-batched-tokens 131072
+  --no-enable-chunked-prefill --no-enable-prefix-caching
+  --max-num-batched-tokens 131072
   --long-prefill-token-threshold 0
 )
 vllm serve "${embedding[@]}" --hf-overrides "$embedding_pool_free_hf" \
@@ -119,6 +120,27 @@ inputs in one worker step. The scheduler budget inherits the batch budget.
 Keep prefix caching disabled and let vLLM derive the KV allocation. Check
 the startup logs for pool-free FA2 selection and zero physical KV allocation
 across all 28 layers. Ineligible FA2 configurations use paged KV and log the reason.
+
+### Text Small pool-free FP8 prefill
+
+Use the same pool-free settings with the explicit FP8 backend.
+
+```bash
+vllm serve "${embedding[@]}" --hf-overrides "$embedding_pool_free_hf" \
+  "${embedding_pool_free[@]}" --attention-backend JINA_FP8_PREFILL \
+  --kv-cache-dtype fp8_per_token_head_p_row
+```
+
+Use `fp8_per_token_head_p_tile` to select tile scaling. The backend uses FP8
+attention math and BF16 Q/K/V input and output. Append
+`"${embedding_w8a8[@]}"` to also select W8A8 Linear. Invalid explicit
+FP8 prefill configurations fail at startup.
+
+On RTX 5090, FA2 and both FP8 attention modes processed four 32,768-token
+inputs in one worker step and returned four normalized vectors. With BF16
+Linear, worker peak allocated memory was 4.43 GiB across all three paths.
+Peak reserved memory was 6.76 GiB for FA2 and 7.26 GiB for both FP8 modes.
+The local measurement report is `docs/embeddings-v5-text-small-validation.md`.
 
 ## Serve Jina Reranker v3.5
 
@@ -220,8 +242,9 @@ same full-prompt settings. Enable the plugin through
 `tools.compare_reference --pool-free --kv-cache-dtype <mode>` also sets the
 backend and full-context budgets.
 
-The FP8 backend requires the Jina v3.5 architecture, NVIDIA CUDA Model Runner
-V2, BF16 activations and complete prompts in one scheduler step. It quantizes
+The FP8 backend requires a supported Jina plugin architecture, NVIDIA CUDA
+Model Runner V2, BF16 activations and complete prompts in one scheduler step.
+It quantizes
 Q/K/V per token and head for each forward, uses E4M3 for both attention dot
 products and returns BF16. Both modes contribute zero physical KV cache.
 Standard KV dtype values retain their native meaning. Append

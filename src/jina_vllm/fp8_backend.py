@@ -23,6 +23,12 @@ class JinaFP8PrefillImpl(AttentionImpl[PrefillMetadata]):
         attn_type: str = AttentionType.DECODER,
         kv_sharing_target_layer_name: str | None = None,
     ) -> None:
+        if (num_heads, num_kv_heads, head_size) != (16, 8, 128):
+            raise ValueError(
+                "JINA_FP8_PREFILL requires 16 Q heads, 8 KV heads, and head size 128"
+            )
+        if attn_type != AttentionType.DECODER:
+            raise ValueError("JINA_FP8_PREFILL requires causal decoder attention")
         self.scale = scale
         self.window = sliding_window or 0
         self.sliding_window = (sliding_window - 1, 0) if sliding_window else (-1, -1)

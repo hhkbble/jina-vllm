@@ -13,7 +13,13 @@ from vllm.v1.attention.backends.flash_attn import (
 from vllm.v1.attention.backends.registry import AttentionBackendEnum
 from vllm.v1.kv_cache_interface import KVQuantMode
 
-from jina_vllm.config import fp8_prefill_mode, register_prefill_modes
+from jina_vllm.config import (
+    fp8_prefill_mode,
+    register_prefill_modes,
+    validate_prefill_selection,
+)
+from jina_vllm.embeddings_v5_text_small import ARCH as EMBEDDINGS_ARCH
+from jina_vllm.fp8_backend import JinaFP8PrefillImpl
 from jina_vllm.prefill import (
     PrefillModelState,
     fp8_prefill_reason,
@@ -138,7 +144,13 @@ def test_explicit_fp8_config_and_fusion_defaults(monkeypatch, mode):
             "JINA_FP8_PREFILL",
             "fp8_per_token_head_p_tile",
             "Other",
-            "requires JinaRerankerV35",
+            "requires .*JinaRerankerV35",
+        ),
+        (
+            "JINA_FP8_PREFILL",
+            "fp8_per_token_head_p_tile",
+            "JinaEmbeddingsV5Model",
+            "requires .*JinaEmbeddingsV5TextSmall",
         ),
     ],
 )
@@ -153,6 +165,44 @@ def test_registered_fp8_selection_rejects_invalid_pair(
     )
     with pytest.raises(ValueError, match=error):
         VllmConfig.try_verify_and_update_config(config)
+
+
+@pytest.mark.parametrize(
+    "mode", ["fp8_per_token_head_p_row", "fp8_per_token_head_p_tile"]
+)
+def test_text_small_architecture_accepts_explicit_fp8_prefill(mode):
+    register_prefill_modes()
+    config = SimpleNamespace(
+        model_config=SimpleNamespace(architecture=EMBEDDINGS_ARCH),
+        cache_config=CacheConfig(cache_dtype=mode),
+        attention_config=AttentionConfig(backend=AttentionBackendEnum.JINA_FP8_PREFILL),
+    )
+    validate_prefill_selection(config)
+
+
+@pytest.mark.parametrize(
+    "heads,kv_heads,dim,attn_type,error",
+    [
+        (8, 8, 128, "decoder", "16 Q heads"),
+        (16, 4, 128, "decoder", "8 KV heads"),
+        (16, 8, 64, "decoder", "head size 128"),
+        (16, 8, 128, "encoder_only", "causal decoder"),
+    ],
+)
+def test_fp8_impl_rejects_incompatible_attention(
+    heads, kv_heads, dim, attn_type, error
+):
+    with pytest.raises(ValueError, match=error):
+        JinaFP8PrefillImpl(
+            num_heads=heads,
+            num_kv_heads=kv_heads,
+            head_size=dim,
+            attn_type=attn_type,
+            scale=dim**-0.5,
+            alibi_slopes=None,
+            sliding_window=None,
+            kv_cache_dtype="fp8_per_token_head_p_row",
+        )
 
 
 def test_explicitly_disabled_qk_fusion_and_missing_fp8_option(monkeypatch):
