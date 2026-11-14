@@ -12,9 +12,9 @@ from urllib.parse import urlsplit
 import httpx
 from transformers import AutoTokenizer
 
-from jina_vllm.reranker_v35.contract import MAX_LENGTH
+from jina_vllm.reranker_v35.config import reranker_block_size
 from jina_vllm.reranker_v35.ranking import prepare_request
-from tools.bench_serving import wait_ready
+from tools.bench_serving import served_max_model_len, wait_ready
 from tools.compare_reference import model_directory, read_workload
 
 
@@ -31,13 +31,22 @@ async def check(args):
     cases = read_workload(args.workload)
     tokenizer = AutoTokenizer.from_pretrained(model_directory(), local_files_only=True)
 
-    def prompt_tokens(pairs):
-        plan = prepare_request(pairs, tokenizer, MAX_LENGTH)
-        return sum(len(block.prompt_token_ids) for block in plan.blocks)
-
+    block_size = reranker_block_size(args.additional_config)
     results = []
     async with httpx.AsyncClient(base_url=args.base_url, timeout=180) as client:
         await wait_ready(client)
+        max_model_len = await served_max_model_len(client)
+
+        def block_lengths(pairs):
+            plan = prepare_request(
+                pairs, tokenizer, max_model_len, block_size=block_size
+            )
+            return [len(block.prompt_token_ids) for block in plan.blocks]
+
+        async def completed_blocks():
+            response = await client.get("/metrics")
+            response.raise_for_status()
+            return metric(response.text, "vllm:request_prompt_tokens_count")
 
         async def rerank(case, path="/rerank", **extra):
             response = await client.post(
@@ -52,6 +61,7 @@ async def check(args):
             return response.json()
 
         for case in cases:
+            before = await completed_blocks()
             data = await rerank(case)
             documents = case["documents"]
             rows = data["results"]
@@ -59,11 +69,23 @@ async def check(args):
             for row in rows:
                 assert row["document"]["text"] == documents[row["index"]]
                 assert math.isfinite(row["relevance_score"])
-            assert data["usage"]["prompt_tokens"] == prompt_tokens(
-                [(case["query"], documents)]
+            lengths = block_lengths([(case["query"], documents)])
+            assert data["usage"]["prompt_tokens"] == sum(lengths)
+            deadline = time.monotonic() + 5
+            while (observed := await completed_blocks() - before) < len(lengths):
+                if time.monotonic() >= deadline:
+                    break
+                await asyncio.sleep(0.05)
+            assert observed == len(lengths), (
+                f"Expected {len(lengths)} completed blocks, observed {observed}"
             )
             results.append(
-                dict(id=case["id"], prompt_tokens=data["usage"]["prompt_tokens"])
+                dict(
+                    id=case["id"],
+                    prompt_tokens=data["usage"]["prompt_tokens"],
+                    block_prompt_tokens=lengths,
+                    completed_blocks=int(observed),
+                )
             )
         short = cases[0]
         for path in ["/v1/rerank", "/v2/rerank"]:
@@ -83,8 +105,8 @@ async def check(args):
                 range(len(short["documents"]))
             )
             assert all(math.isfinite(row["score"]) for row in data["data"])
-            assert data["usage"]["prompt_tokens"] == prompt_tokens(
-                [(short["query"], short["documents"])]
+            assert data["usage"]["prompt_tokens"] == sum(
+                block_lengths([(short["query"], short["documents"])])
             )
         pairs = [short["query"]] * 2
         pair_docs = short["documents"][:2]
@@ -95,8 +117,10 @@ async def check(args):
         data = paired.json()
         assert [row["index"] for row in data["data"]] == [0, 1]
         assert all(math.isfinite(row["score"]) for row in data["data"])
-        assert data["usage"]["prompt_tokens"] == prompt_tokens(
-            [(query, [doc]) for query, doc in zip(pairs, pair_docs, strict=True)]
+        assert data["usage"]["prompt_tokens"] == sum(
+            block_lengths(
+                [(query, [doc]) for query, doc in zip(pairs, pair_docs, strict=True)]
+            )
         )
         for extra in [
             {"max_tokens_per_doc": 12},
@@ -167,6 +191,8 @@ async def check(args):
         )
     return dict(
         mode=args.mode,
+        block_size=block_size,
+        max_model_len=max_model_len,
         routes_passed=["/rerank", "/v1/rerank", "/v2/rerank", "/score", "/v1/score"],
         cases=results,
         options_passed=True,
@@ -182,6 +208,7 @@ def main():
     parser.add_argument("--workload", type=Path, required=True)
     parser.add_argument("--server-log", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--additional-config", type=json.loads, default={})
     args = parser.parse_args()
     result = asyncio.run(check(args))
     args.output.write_text(json.dumps(result, indent=2) + "\n")

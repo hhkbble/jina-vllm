@@ -7,6 +7,7 @@ from vllm.exceptions import VLLMValidationError
 from vllm.outputs import PoolingOutput, PoolingRequestOutput
 from vllm.renderers import TokenizeParams
 
+from .config import reranker_block_size
 from .contract import validate_tokenizer
 from .ranking import merge_request, prepare_request
 
@@ -21,6 +22,7 @@ class RerankerV35ScoringIOProcessor(ScoringIOProcessor):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         validate_tokenizer(self.tokenizer)
+        self.block_size = reranker_block_size(self.vllm_config.additional_config)
 
     def get_request_factory_online(self, ctx: "RerankerV35ServeContext"):
         request = ctx.request
@@ -35,7 +37,10 @@ class RerankerV35ScoringIOProcessor(ScoringIOProcessor):
         )
         try:
             ctx.plan = prepare_request(
-                groups, self.tokenizer, self.model_config.max_model_len
+                groups,
+                self.tokenizer,
+                self.model_config.max_model_len,
+                block_size=self.block_size,
             )
         except ValueError as error:
             raise VLLMValidationError(str(error)) from error

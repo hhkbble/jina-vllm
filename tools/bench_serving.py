@@ -11,7 +11,7 @@ import numpy as np
 import pynvml
 from transformers import AutoTokenizer
 
-from jina_vllm.reranker_v35.contract import MAX_LENGTH
+from jina_vllm.reranker_v35.config import reranker_block_size
 from jina_vllm.reranker_v35.ranking import prepare_request
 from tools.compare_reference import model_directory, read_workload
 
@@ -29,6 +29,12 @@ async def wait_ready(client):
     raise RuntimeError("Server readiness timed out")
 
 
+async def served_max_model_len(client):
+    response = await client.get("/v1/models")
+    response.raise_for_status()
+    return response.json()["data"][0]["max_model_len"]
+
+
 async def measure(args):
     cases = read_workload(args.workload)
     workload = {
@@ -41,12 +47,22 @@ async def measure(args):
         )[:3],
     }
     tokenizer = AutoTokenizer.from_pretrained(model_directory(), local_files_only=True)
+    block_size = reranker_block_size(args.additional_config)
+    async with httpx.AsyncClient(base_url=args.base_url, timeout=180) as client:
+        await wait_ready(client)
+        max_model_len = await served_max_model_len(client)
+
     preprocessing = {}
     for name, selected in workload.items():
         samples = []
         for case in selected:
             start = time.perf_counter()
-            prepare_request([(case["query"], case["documents"])], tokenizer, MAX_LENGTH)
+            prepare_request(
+                [(case["query"], case["documents"])],
+                tokenizer,
+                max_model_len,
+                block_size=block_size,
+            )
             samples.append(time.perf_counter() - start)
         preprocessing[name] = {
             "p50_seconds": float(np.median(samples)),
@@ -156,6 +172,8 @@ async def measure(args):
     pynvml.nvmlShutdown()
     return dict(
         mode=args.mode,
+        block_size=block_size,
+        max_model_len=max_model_len,
         workload=str(args.workload),
         cells=cells,
         preprocessing=preprocessing,
@@ -174,6 +192,7 @@ def main():
     parser.add_argument("--base-url", default="http://127.0.0.1:18035")
     parser.add_argument("--workload", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--additional-config", type=json.loads, default={})
     parser.add_argument("--concurrency", type=int, nargs="+", default=[1, 4, 8])
     parser.add_argument("--requests", type=int, default=12)
     parser.add_argument("--warmup-requests", type=int, default=0)

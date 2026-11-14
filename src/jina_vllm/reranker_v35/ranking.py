@@ -1,4 +1,4 @@
-"""Official v3.5 request planning and raw-vector fusion, independent of vLLM.
+"""v3.5 request planning and raw-vector fusion, independent of vLLM.
 
 Template and algorithm adapted from jinaai/jina-reranker-v3.5 modeling.py,
 revision e8a93f33f0b22108f8c2364f8484ce3422552fbc.
@@ -13,11 +13,12 @@ import torch
 import torch.nn.functional as F
 
 from .contract import (
+    DEFAULT_BLOCK_SIZE,
     DOC_MARKER,
     DOC_TOKEN_ID,
-    MAX_LENGTH,
     QUERY_MARKER,
     QUERY_TOKEN_ID,
+    validate_block_size,
 )
 
 
@@ -70,16 +71,60 @@ def format_prompt(query: str, documents: Sequence[str]) -> str:
     )
 
 
-def _truncate(text: str, limit: int, tokenizer: Any) -> tuple[str, int]:
+def _truncate(text: str, limit: int, tokenizer: Any) -> str:
     ids = tokenizer(text, truncation=True, max_length=limit)["input_ids"]
-    return (tokenizer.decode(ids) if len(ids) >= limit else text), len(ids)
+    return tokenizer.decode(ids) if len(ids) >= limit else text
+
+
+def _fit_block(
+    query: str,
+    documents: list[str],
+    start: int,
+    end: int,
+    tokenizer: Any,
+    limit: int,
+    output_index: int,
+) -> tuple[int, list[int]]:
+    def encode(stop: int) -> list[int]:
+        # The engine supplies the limit, including for prompts probed here
+        # that go beyond the checkpoint tokenizer's advisory length.
+        return tokenizer(
+            format_prompt(query, documents[start:stop]), truncation=False, verbose=False
+        )["input_ids"]
+
+    ids = encode(end)
+    if len(ids) <= limit:
+        return end, ids
+
+    # The pinned template and tokenizer increase the prompt length as passages
+    # are appended. Each has a numbered wrapper and its own marker, and passage
+    # count digits tokenize separately. Search prefixes to avoid tokenizing
+    # every growing prompt in a long list.
+    fits, exceeds = start, end
+    best_ids = None
+    while exceeds - fits > 1:
+        middle = (fits + exceeds) // 2
+        ids = encode(middle)
+        if len(ids) <= limit:
+            fits, best_ids = middle, ids
+        else:
+            exceeds = middle
+    if best_ids is None:
+        raise ValueError(
+            f"Jina document at index {output_index} needs {len(ids)} prompt "
+            f"tokens with its template, exceeding max_model_len={limit}"
+        )
+    return fits, best_ids
 
 
 def prepare_request(
     groups: Sequence[tuple[str, Sequence[str]]],
     tokenizer: Any,
     engine_max_length: int,
+    *,
+    block_size: int = DEFAULT_BLOCK_SIZE,
 ) -> RankingPlan:
+    validate_block_size(block_size)
     blocks = []
     offset = 0
     if not groups:
@@ -89,37 +134,23 @@ def prepare_request(
         if not documents:
             raise ValueError("Each query requires at least one document")
         prepared = [_truncate(doc, 8192, tokenizer) for doc in documents]
-        query, query_length = _truncate(query, 1024, tokenizer)
-        capacity = MAX_LENGTH - 2 * query_length
-        current: list[str] = []
-        indices: list[int] = []
-
-        def emit(query, current, indices, group_id) -> None:
-            ids = tokenizer.encode(format_prompt(query, current))
-            if len(ids) > min(MAX_LENGTH, engine_max_length):
-                raise ValueError(
-                    f"Official Jina block has {len(ids)} tokens, exceeding "
-                    f"the engine limit {min(MAX_LENGTH, engine_max_length)}; "
-                    "final prompts cannot be truncated or repartitioned"
-                )
-            if (
-                ids.count(DOC_TOKEN_ID) != len(current)
-                or ids.count(QUERY_TOKEN_ID) != 1
-            ):
+        query = _truncate(query, 1024, tokenizer)
+        start = 0
+        while start < len(prepared):
+            end, ids = _fit_block(
+                query,
+                prepared,
+                start,
+                min(start + block_size, len(prepared)),
+                tokenizer,
+                engine_max_length,
+                offset + start,
+            )
+            if ids.count(DOC_TOKEN_ID) != end - start or ids.count(QUERY_TOKEN_ID) != 1:
                 raise ValueError("Jina prompt marker counts do not match the block")
-            blocks.append(BlockPlan(group_id, tuple(indices), tuple(ids)))
-
-        for index, (document, length) in enumerate(prepared):
-            current.append(document)
-            indices.append(offset + index)
-            capacity -= length
-            if len(current) >= 125 or capacity <= 8192:
-                emit(query, current, indices, group_id)
-                current = []
-                indices = []
-                capacity = MAX_LENGTH - 2 * query_length
-        if current:
-            emit(query, current, indices, group_id)
+            indices = tuple(range(offset + start, offset + end))
+            blocks.append(BlockPlan(group_id, indices, tuple(ids)))
+            start = end
         offset += len(documents)
 
     return RankingPlan(offset, tuple(blocks))

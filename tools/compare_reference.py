@@ -12,14 +12,21 @@ from huggingface_hub import snapshot_download
 
 from jina_vllm.config import FP8_PREFILL_BACKEND, FP8_PREFILL_MODES
 from jina_vllm.plugin import PLUGIN_NAME
+from jina_vllm.reranker_v35.config import reranker_block_size
 from jina_vllm.reranker_v35.contract import (
     ARCH,
+    DOC_TOKEN_ID,
     LAYER_TYPES,
     MAX_LENGTH,
     MODEL_ID,
     REVISION,
 )
-from jina_vllm.reranker_v35.ranking import merge_request, prepare_request
+from jina_vllm.reranker_v35.ranking import (
+    BlockPlan,
+    RankingPlan,
+    merge_request,
+    prepare_request,
+)
 
 
 def model_directory():
@@ -38,7 +45,8 @@ def engine_kwargs(args):
         dtype="bfloat16",
         kv_cache_dtype=getattr(args, "kv_cache_dtype", None) or "bfloat16",
         attention_config={"backend": "FLASH_ATTN", "flash_attn_version": 2},
-        max_model_len=MAX_LENGTH,
+        additional_config=args.additional_config,
+        max_model_len=args.max_model_len,
         max_num_batched_tokens=args.batch_tokens,
         max_num_seqs=4,
         gpu_memory_utilization=0.75,
@@ -49,8 +57,8 @@ def engine_kwargs(args):
     )
     if args.pool_free:
         options.update(
-            max_num_batched_tokens=MAX_LENGTH,
-            max_num_scheduled_tokens=MAX_LENGTH,
+            max_num_batched_tokens=args.max_model_len,
+            max_num_scheduled_tokens=args.max_model_len,
             long_prefill_token_threshold=0,
         )
     if getattr(args, "kv_cache_dtype", None):
@@ -142,6 +150,8 @@ def native_run(args, cases):
     os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
     start = time.perf_counter()
     llm = LLM(**engine_kwargs(args))
+    engine_config = llm.llm_engine.vllm_config
+    block_size = reranker_block_size(engine_config.additional_config)
     metadata = llm.apply_model(inspect_model)[0]
     if args.pool_free and (
         len(metadata["attention"]) != len(LAYER_TYPES)
@@ -159,7 +169,10 @@ def native_run(args, cases):
     for case in cases:
         start = time.perf_counter()
         plan = prepare_request(
-            [(case["query"], case["documents"])], llm.get_tokenizer(), MAX_LENGTH
+            [(case["query"], case["documents"])],
+            llm.get_tokenizer(),
+            llm.model_config.max_model_len,
+            block_size=block_size,
         )
         preprocess = time.perf_counter() - start
         if args.profile and not results:
@@ -172,6 +185,12 @@ def native_run(args, cases):
             tokenization_kwargs={"add_special_tokens": False},
             use_tqdm=False,
         )
+        for block, output in zip(plan.blocks, outputs, strict=True):
+            if (
+                not output.finished
+                or tuple(output.prompt_token_ids) != block.prompt_token_ids
+            ):
+                raise RuntimeError("Jina block output token IDs or completion mismatch")
         raw = [out.outputs.data for out in outputs]
         scores = merge_request(plan, raw)
         seconds = time.perf_counter() - start
@@ -183,6 +202,8 @@ def native_run(args, cases):
                 scores=scores,
                 raw=raw,
                 prompt_token_ids=[list(b.prompt_token_ids) for b in plan.blocks],
+                block_document_counts=[len(b.output_indices) for b in plan.blocks],
+                block_prompt_tokens=[len(b.prompt_token_ids) for b in plan.blocks],
                 preprocess_seconds=preprocess,
                 inference_seconds=seconds,
             )
@@ -192,6 +213,8 @@ def native_run(args, cases):
         mode=args.mode,
         kv_cache_dtype=args.kv_cache_dtype or "bfloat16",
         metadata=metadata,
+        block_size=block_size,
+        max_model_len=llm.model_config.max_model_len,
         init_seconds=init_seconds,
         results=results,
     )
@@ -242,10 +265,15 @@ def hf_run(args, cases):
         scores = [0.0] * len(ranked)
         for item in ranked:
             scores[int(item["index"])] = float(item["relevance_score"])
-        plan = prepare_request(
-            [(case["query"], case["documents"])], tokenizer, MAX_LENGTH
-        )
-        assert ids == [list(b.prompt_token_ids) for b in plan.blocks]
+        # Use the reference's own blocks to compare its fusion with CPU fusion.
+        blocks = []
+        offset = 0
+        for prompt_ids in ids:
+            end = offset + prompt_ids.count(DOC_TOKEN_ID)
+            blocks.append(BlockPlan(0, tuple(range(offset, end)), tuple(prompt_ids)))
+            offset = end
+        assert offset == len(scores)
+        plan = RankingPlan(offset, tuple(blocks))
         results.append(
             dict(
                 id=case["id"],
@@ -271,6 +299,8 @@ def main():
     parser.add_argument("--mode", choices=["hf", "bf16", "fp8"], required=True)
     parser.add_argument("--workload", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--additional-config", type=json.loads, default={})
+    parser.add_argument("--max-model-len", type=int, default=MAX_LENGTH)
     parser.add_argument(
         "--batch-tokens", type=int, help="Paged token budget (default: 8192)"
     )
@@ -298,11 +328,15 @@ def main():
     args = parser.parse_args()
     if args.kv_cache_dtype and not args.pool_free:
         parser.error("--kv-cache-dtype requires --pool-free")
+    if args.mode == "hf" and (
+        args.pool_free or args.additional_config or args.max_model_len != MAX_LENGTH
+    ):
+        parser.error("HF reference mode uses the checkpoint's own configuration")
     if args.pool_free and (
-        args.mode == "hf" or args.batch_tokens not in (None, MAX_LENGTH)
+        args.max_model_len < 1 or args.batch_tokens not in (None, args.max_model_len)
     ):
         parser.error(
-            f"--pool-free requires a native mode and a {MAX_LENGTH}-token budget"
+            "--pool-free requires a positive --max-model-len and a matching budget"
         )
     if args.batch_tokens is None:
         args.batch_tokens = 8192

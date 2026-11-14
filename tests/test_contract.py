@@ -4,7 +4,20 @@ from types import SimpleNamespace
 import pytest
 from transformers import AutoConfig
 
+from jina_vllm.reranker_v35.config import reranker_block_size
 from jina_vllm.reranker_v35.contract import validate_model_contract
+
+
+def test_block_size_configuration():
+    assert reranker_block_size({"other_extension": {"key": 1}}) == 125
+    assert reranker_block_size({"jina_vllm": {"reranker_v35": {"block_size": 1}}}) == 1
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 125.0, "125", None])
+def test_block_size_requires_positive_integer(value):
+    config = {"jina_vllm": {"reranker_v35": {"block_size": value}}}
+    with pytest.raises(ValueError, match="positive integer"):
+        reranker_block_size(config)
 
 
 @pytest.fixture

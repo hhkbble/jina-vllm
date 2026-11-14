@@ -125,6 +125,7 @@ def test_explicit_fp8_config_and_fusion_defaults(monkeypatch, mode):
     )
     compilation = CompilationConfig(pass_config={"fuse_norm_quant": True})
     config = SimpleNamespace(
+        additional_config={},
         model_config=SimpleNamespace(enforce_eager=False),
         compilation_config=compilation,
     )
@@ -212,7 +213,7 @@ def test_explicitly_disabled_qk_fusion_and_missing_fp8_option(monkeypatch):
     compilation = CompilationConfig(
         pass_config={"enable_qk_norm_rope_fusion": False, "fuse_act_quant": True}
     )
-    config = SimpleNamespace(compilation_config=compilation)
+    config = SimpleNamespace(additional_config={}, compilation_config=compilation)
     RerankerV35Config.verify_and_update_config(config)
     assert fp8_prefill_mode("fp8_per_token_head") is None
     assert compilation.pass_config.enable_qk_norm_rope_fusion is False

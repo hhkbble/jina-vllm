@@ -69,6 +69,8 @@ For real GPU validation, use the native CLI and offline receipt commands in
 README. Set `JINA_GPU_ARTIFACTS` to trusted native receipts for the model
 structure and kernel trace checks. Run final model quality evaluation before
 release.
+For reranker block changes, compare HTTP completion counts and offline token
+IDs using the same `--additional-config` and the engine's effective length.
 Use a child logger under `vllm.jina_vllm` for native startup/cleanup receipts.
 Report executed environment, model, HTTP, kernel and performance checks
 separately.

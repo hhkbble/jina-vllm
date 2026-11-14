@@ -1,6 +1,5 @@
 from types import MethodType
 
-import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
@@ -64,25 +63,40 @@ def test_real_token_boundaries(reference_module, tokenizer, q_len, d_len):
     assert plan.blocks[0].prompt_token_ids == ids[0]
 
 
-@pytest.mark.parametrize("length", [8180, 8191, 8192])
-def test_capacity_chunks(reference_module, tokenizer, length):
-    docs = [" b" * length] * 16
-    oracle, ids, raw = make_oracle(reference_module, tokenizer)
-    expected = oracle.rerank(" a" * 20, docs)
-    if any(len(block) > MAX_LENGTH for block in ids):
-        with pytest.raises(ValueError, match="exceeding"):
-            prepare_request([(" a" * 20, docs)], tokenizer, MAX_LENGTH)
-        return
-    plan = prepare_request([(" a" * 20, docs)], tokenizer, MAX_LENGTH)
-    assert [block.prompt_token_ids for block in plan.blocks] == ids
-    scores = merge_request(plan, raw)
-    np.testing.assert_array_equal(
-        scores,
-        [
-            next(x["relevance_score"] for x in expected if x["index"] == i)
-            for i in range(len(docs))
-        ],
-    )
+def test_configured_block_fits_300_documents(tokenizer):
+    docs = [f"document {i}" for i in range(300)]
+    plan = prepare_request([("query", docs)], tokenizer, MAX_LENGTH, block_size=300)
+    (block,) = plan.blocks
+    assert block.output_indices == tuple(range(300))
+    expected = tokenizer.encode(format_prompt("query", docs))
+    assert block.prompt_token_ids == tuple(expected)
+
+
+def test_exact_capacity_and_one_token_split(reference_module, tokenizer):
+    query = "query"
+    docs = ["first document", " b" * 35]
+    oracle, ids, _ = make_oracle(reference_module, tokenizer)
+    oracle.rerank(query, docs)
+    (whole,) = ids
+    limit = len(whole)
+    plan = prepare_request([(query, docs)], tokenizer, limit)
+    assert plan.blocks[0].prompt_token_ids == whole
+
+    longer = [docs[0], docs[1] + " b"]
+    assert len(tokenizer.encode(format_prompt(query, longer))) == limit + 1
+    plan = prepare_request([(query, longer)], tokenizer, limit)
+    assert [b.output_indices for b in plan.blocks] == [(0,), (1,)]
+    assert [b.prompt_token_ids for b in plan.blocks] == [
+        tuple(tokenizer.encode(format_prompt(query, [doc]))) for doc in longer
+    ]
+
+
+def test_full_context_uses_actual_template_budget(tokenizer):
+    query, docs = " a" * 20, [" b" * 8192] * 16
+    plan = prepare_request([(query, docs)], tokenizer, MAX_LENGTH)
+    assert [len(b.output_indices) for b in plan.blocks] == [15, 1]
+    assert all(len(b.prompt_token_ids) <= MAX_LENGTH for b in plan.blocks)
+    assert len(tokenizer.encode(format_prompt(query, docs))) > MAX_LENGTH
 
 
 def test_text_template_markers_and_original_strings(reference_module, tokenizer):
@@ -114,11 +128,12 @@ def test_preflight_rejects_markers_and_prompt_overflow(tokenizer):
         prepare_request(
             [("<|rerank_<|rerank_token|>token|>", ["doc"])], tokenizer, MAX_LENGTH
         )
-    plan = prepare_request([("query", ["doc"])], tokenizer, MAX_LENGTH)
-    with pytest.raises(ValueError, match="cannot be truncated"):
-        prepare_request(
-            [("query", ["doc"])], tokenizer, len(plan.blocks[0].prompt_token_ids) - 1
-        )
+    query, doc = "query", " b" * 100
+    length = len(tokenizer.encode(format_prompt(query, [doc])))
+    with pytest.raises(
+        ValueError, match=f"index 1 needs {length} prompt tokens.*{length - 1}"
+    ):
+        prepare_request([(query, ["short", doc])], tokenizer, length - 1)
 
 
 def test_group_isolation_and_bad_outputs(tokenizer):

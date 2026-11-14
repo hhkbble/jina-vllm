@@ -1,4 +1,4 @@
-"""Generate small semantic probes and the official capacity boundary workload."""
+"""Generate reranker probes for ranking, document count, and context capacity."""
 
 import argparse
 import json
@@ -8,6 +8,7 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--include-count300", action="store_true")
     args = parser.parse_args()
     cases = [
         dict(
@@ -42,6 +43,14 @@ def main():
         ),
         dict(id="capacity", query=" a" * 20, documents=[" b" * 8192] * 16),
     ]
+    if args.include_count300:
+        cases.append(
+            dict(
+                id="count300",
+                query=cases[2]["query"],
+                documents=[f"Passage {i}: GPU inference." for i in range(300)],
+            )
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("".join(json.dumps(case) + "\n" for case in cases))
 

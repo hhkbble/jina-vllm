@@ -289,15 +289,29 @@ rejected. Rerank returns original text/index, stable descending scores and nativ
 usage. `top_n` omitted or zero returns all documents; `/score` preserves input
 order. Scores are raw cosine, not probabilities.
 
-The official profile always right-truncates queries to 1024 tokens and documents
+The reranker right-truncates queries to 1024 tokens and documents
 to 8192 before formatting. Request limits accept only 0 or those exact values;
 0 adds no extra request-level limit. Empty strings are allowed. Nonempty
 instructions, template changes, final-prompt truncation, padding to max length,
-activation changes and dynamic LoRA are unsupported. Final prompts exceeding the
-engine limit or violating marker counts fail before any GPU submission. Reducing
-`max_model_len` rejects oversized official blocks rather than silently repartitioning
-them. Long lists split at the official count/capacity boundaries, then fuse raw
-query vectors across blocks.
+activation changes and dynamic LoRA are unsupported.
+
+Each rerank block holds up to 125 documents by default. The planner takes
+documents in order and starts a new block when the next document would exceed
+the count limit or the actual token limit for the complete prompt. The token
+limit is vLLM's effective `max_model_len`. Exact counting can change block
+boundaries for long requests compared with the original heuristic. If a single
+document with its template exceeds the limit, the request fails before GPU
+submission and reports its index and token count. Raw query vectors are fused
+across blocks in the same group.
+
+Set a positive `block_size` at startup to change the document limit. For example,
+append the following option to the reranker serving command:
+
+```bash
+--additional-config '{"jina_vllm":{"reranker_v35":{"block_size":300}}}'
+```
+
+In Python, pass the same dictionary as `LLM(additional_config=...)`.
 
 The plugin affects only instances explicitly selecting `JinaRerankerV35`.
 Other architectures retain native behavior. vLLM internals are version-pinned;
@@ -336,9 +350,14 @@ Use trusted receipts for the GPU structure and kernel trace checks. The offline
 inspection tool uses vLLM's pickle-based worker callable transport for
 `apply_model`. It also supports collecting output from the official HF model.
 
-`tools.check_http` checks native responses and disconnect cleanup on a paged
-server. Start it with `--enable-request-id-headers`, and provide the probe
-workload and server log. `tools.bench_serving` measures latency and throughput.
+`tools.check_http` checks native responses, completed block counts, and
+disconnect cleanup. Run it against a dedicated paged test server started with
+`--enable-request-id-headers`, and provide the probe workload and server log.
+To verify a larger document limit, generate the workload with
+`--include-count300` and supply the same `--additional-config` to the server,
+`tools.check_http`, and `tools.compare_reference` for the corresponding checks.
+`tools.bench_serving` measures latency and throughput and accepts the same
+configuration for its CPU planning check.
 Both commands expose their options with `--help`. Workload JSONL rows contain
 `id`, `query`, and a list of `documents`. Local design notes and measurement
 reports live in ignored `docs/`.

@@ -4,6 +4,7 @@ ARCH = "JinaRerankerV35"
 MODEL_ID = "jinaai/jina-reranker-v3.5"
 REVISION = "e8a93f33f0b22108f8c2364f8484ce3422552fbc"
 MAX_LENGTH = 131072
+DEFAULT_BLOCK_SIZE = 125
 DOC_MARKER = "<|embed_token|>"
 QUERY_MARKER = "<|rerank_token|>"
 DOC_TOKEN_ID = 151670
@@ -12,6 +13,11 @@ FULL_LAYERS = {1, 2, 6, 7, 11, 12, 16, 17, 21, 22, 26, 27}
 LAYER_TYPES = tuple(
     "full_attention" if i in FULL_LAYERS else "sliding_attention" for i in range(28)
 )
+
+
+def validate_block_size(block_size: int) -> None:
+    if type(block_size) is not int or block_size < 1:
+        raise ValueError("Jina reranker_v35.block_size must be a positive integer")
 
 
 def validate_version() -> None:
