@@ -86,6 +86,18 @@ Offline, construct native `LLM` with the same model and pooling configuration,
 then use `llm.embed(inputs, pooling_params=PoolingParams(dimensions=32))`.
 The same input can show small BF16 numerical differences across GPU batch shapes.
 
+### Text Small W8A8 Linear
+
+Use native online FP8 per-channel weights and dynamic per-token activations.
+vLLM merges the selected adapter before quantizing the backbone Linear weights.
+The embedding table stays BF16 and the pooling head stays FP32.
+
+```bash
+embedding_w8a8=(--quantization fp8_per_channel --linear-backend cutlass)
+VLLM_PLUGINS='' vllm serve "${embedding[@]}" --hf-overrides "$embedding_hf" \
+  "${embedding_fa2[@]}" "${embedding_paged[@]}" "${embedding_w8a8[@]}"
+```
+
 ## Serve Jina Reranker v3.5
 
 Use revision `e8a93f33f0b22108f8c2364f8484ce3422552fbc` for this model.
