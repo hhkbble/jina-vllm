@@ -57,7 +57,7 @@ embedding=(
   "$JINA_EMBED_MODEL_DIR" --host 127.0.0.1 --port 8000
   --runner pooling --model-impl vllm --trust-remote-code --dtype bfloat16
   --pooler-config '{"task":"embed","seq_pooling_type":"LAST","use_activation":true}'
-  --max-model-len 32768 --max-num-seqs 4 --disable-flashinfer-autotune
+  --max-model-len 32768 --max-num-seqs 16 --disable-flashinfer-autotune
 )
 embedding_hf='{"jina_task":"retrieval","matryoshka_dimensions":[32,64,128,256,512,768,1024]}'
 embedding_fa2=(
@@ -136,9 +136,10 @@ attention math and BF16 Q/K/V input and output. Append
 `"${embedding_w8a8[@]}"` to also select W8A8 Linear. Invalid explicit
 FP8 prefill configurations fail at startup.
 
-On RTX 5090, FA2 and both FP8 attention modes processed four 32,768-token
-inputs in one worker step and returned four normalized vectors. With BF16
-Linear, worker peak allocated memory was 4.43 GiB across all three paths.
+In tests with `--max-num-seqs 4` on RTX 5090, FA2 and both FP8 attention modes
+processed four 32,768-token inputs in one worker step and returned four
+normalized vectors. With BF16 Linear, worker peak allocated memory was
+4.43 GiB across all three paths.
 Peak reserved memory was 6.76 GiB for FA2 and 7.26 GiB for both FP8 modes.
 The local measurement report is `docs/embeddings-v5-text-small-validation.md`.
 
@@ -160,7 +161,7 @@ reranker=(
   --hf-overrides '{"architectures":["JinaRerankerV35"],"embedding_size":512}'
   --pooler-config '{"task":"token_embed"}'
   --dtype bfloat16 --no-enable-prefix-caching --disable-flashinfer-autotune
-  --max-model-len 131072 --max-num-seqs 4 --gpu-memory-utilization 0.75
+  --max-model-len 131072 --max-num-seqs 16 --gpu-memory-utilization 0.75
 )
 fa2=(
   --attention-config '{"backend":"FLASH_ATTN","flash_attn_version":2}'
