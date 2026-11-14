@@ -1,9 +1,8 @@
 # jina-vllm
 
-Out-of-tree support for Jina models in vLLM 0.33.0. The current model is
-`jinaai/jina-reranker-v3.5`. It uses native Qwen3 computation, per-layer
-attention windows, and the official listwise truncation, chunking and
-query-vector fusion algorithm.
+Jina model serving with vLLM 0.33.0. Jina Embeddings v5 Text Small uses
+the native embedding model and API. Jina Reranker v3.5 uses the out-of-tree
+adapter for its per-layer attention windows and listwise scoring.
 
 BF16 is the development baseline. FP8 Linear and FP8 prefill are experimental.
 Final quality evaluation is scheduled before release.
@@ -35,14 +34,61 @@ uv pip install --no-deps .local/output/dist/jina_vllm-0.1.0-py3-none-any.whl
 `--no-deps` assumes the dependencies have already been installed from the lock
 or an equivalent compatible environment. It is not a complete environment setup.
 
-Model and tokenizer must use revision
-`e8a93f33f0b22108f8c2364f8484ce3422552fbc`.
-`model-reference.json` records file hashes. Obtain the full snapshot, including
-its tokenizer and reference code, using `hf download` with that revision.
-Check the model's own license before deployment or redistribution.
+Use the model and tokenizer from the same local snapshot. The model-specific
+revisions are listed below. `model-reference.json` records the reranker
+snapshot hashes.
+
+## Serve Jina Embeddings v5 Text Small
+
+Use the parent checkpoint `jinaai/jina-embeddings-v5-text-small` at revision
+`dd76d535f5447ca3897a9c893fb1e612ead98192`, including its `adapters/` directory.
+Set `JINA_EMBED_MODEL_DIR` to this snapshot. The native loader merges one task
+adapter at startup. Start with `retrieval`; the other options are
+`text-matching`, `classification`, and `clustering`. Verify that the startup log
+reports loading the requested adapter. The pinned config class is loaded from
+the snapshot via `--trust-remote-code`.
+
+```bash
+source scripts/env.sh
+source .venv/bin/activate
+export JINA_EMBED_MODEL_DIR=/path/to/the/pinned/embedding/snapshot
+
+embedding=(
+  "$JINA_EMBED_MODEL_DIR" --host 127.0.0.1 --port 8000
+  --runner pooling --model-impl vllm --trust-remote-code --dtype bfloat16
+  --pooler-config '{"task":"embed","seq_pooling_type":"LAST","use_activation":true}'
+  --max-model-len 32768 --max-num-seqs 4 --disable-flashinfer-autotune
+)
+embedding_hf='{"jina_task":"retrieval","matryoshka_dimensions":[32,64,128,256,512,768,1024]}'
+embedding_fa2=(
+  --attention-config '{"backend":"FLASH_ATTN","flash_attn_version":2}'
+  --kv-cache-dtype bfloat16
+)
+embedding_paged=(
+  --enable-chunked-prefill --max-num-batched-tokens 8192 --no-enable-prefix-caching
+)
+VLLM_PLUGINS='' vllm serve "${embedding[@]}" --hf-overrides "$embedding_hf" \
+  "${embedding_fa2[@]}" "${embedding_paged[@]}"
+```
+
+Use the literal `Query: ` or `Document: ` prefix on each input. The 32,768-token
+limit includes the prefix. Omit `dimensions` for 1024 dimensions, or request
+32, 64, 128, 256, 512, 768, or 1024. Native pooling selects the last token,
+slices to the requested width, and L2 normalizes the vector.
+
+```bash
+curl http://127.0.0.1:8000/v1/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{"input":["Query: What causes waves?","Document: Wind transfers energy to water."],"dimensions":32}'
+```
+
+Offline, construct native `LLM` with the same model and pooling configuration,
+then use `llm.embed(inputs, pooling_params=PoolingParams(dimensions=32))`.
+The same input can show small BF16 numerical differences across GPU batch shapes.
 
 ## Serve Jina Reranker v3.5
 
+Use revision `e8a93f33f0b22108f8c2364f8484ce3422552fbc` for this model.
 Use the pinned local snapshot as the model path. From a source checkout, run
 `source scripts/env.sh` and `source .venv/bin/activate` before the examples.
 For a wheel deployment, activate the environment where the wheel is installed.
