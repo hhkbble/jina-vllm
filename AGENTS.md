@@ -5,6 +5,8 @@
 Read `docs/jina-vllm-reranker-v35-design.md` before implementation, architecture
 changes, or validation planning. It covers the out-of-tree integration and
 reranker contract. Preserve reports and design notes in ignored `docs/`.
+For Text Small changes, read `docs/research-embeddings-v5-text-small-native.md`
+for the snapshot, native pooling contract, and 4×32K worker verification.
 For changes to pool-free prefill, also read `docs/pool-free-prefill.md` for
 the pinned V2 runner contracts and GPU verification commands.
 For `JINA_FP8_PREFILL`, see `docs/pool-free-fp8-design-plan.md` and

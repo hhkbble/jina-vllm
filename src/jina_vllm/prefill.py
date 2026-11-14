@@ -1,6 +1,7 @@
 """Causal attention over packed, complete prompts on vLLM Model Runner V2."""
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
 from vllm import envs
@@ -19,6 +20,9 @@ from vllm.v1.worker.gpu.model_states.interface import ModelSpecificAttnMetadata
 from vllm.v1.worker.utils import AttentionGroup
 
 from .config import FP8_PREFILL_BACKEND, FP8PrefillMode
+
+if TYPE_CHECKING:
+    from vllm.model_executor.models.qwen3 import Qwen3Attention
 
 logger = init_logger("vllm.jina_vllm.prefill")
 
@@ -238,3 +242,16 @@ def replace_with_pool_free_attention(
         prefix=layer.layer_name,
         attn_backend=backend,
     )
+
+
+def install_pool_free_attention(
+    attentions: list["Qwen3Attention"], config: VllmConfig, mode: FP8PrefillMode | None
+) -> str | None:
+    if mode is None:
+        reason = paged_kv_layer_reason([module.attn for module in attentions])
+        if reason is not None:
+            return reason
+
+    for module in attentions:
+        module.attn = replace_with_pool_free_attention(module.attn, config, mode)
+    return None

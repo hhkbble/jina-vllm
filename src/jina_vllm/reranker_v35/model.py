@@ -14,13 +14,12 @@ from vllm.model_executor.models.qwen3 import Qwen3DecoderLayer, Qwen3Model
 from vllm.model_executor.models.utils import extract_layer_index, maybe_prefix
 from vllm.v1.worker.gpu.model_states.default import DefaultModelState
 
-from jina_vllm.config import FP8PrefillMode, fp8_prefill_mode
+from jina_vllm.config import fp8_prefill_mode
 from jina_vllm.prefill import (
     PrefillModelState,
     fp8_prefill_reason,
-    paged_kv_layer_reason,
+    install_pool_free_attention,
     paged_kv_reason,
-    replace_with_pool_free_attention,
 )
 
 from .contract import validate_model_contract
@@ -74,14 +73,23 @@ class JinaRerankerV35(JinaForRanking):
                 raise ValueError(
                     f"{self.fp8_prefill_mode} requires pool-free prefill: {reason}"
                 )
-        if reason is not None:
-            logger.warning("Jina v3.5 attention mode: paged KV (%s)", reason)
         self.model = RerankerV35Backbone(
             vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model")
         )
-        self.pool_free_prefill = reason is None and self._enable_pool_free_prefill(
-            self.fp8_prefill_mode
-        )
+        if reason is None:
+            reason = install_pool_free_attention(
+                [layer.self_attn for layer in self.model.layers],
+                vllm_config,
+                self.fp8_prefill_mode,
+            )
+        self.pool_free_prefill = reason is None
+        if self.pool_free_prefill:
+            logger.info(
+                "Jina v3.5 attention mode: pool-free %s (full-prompt prefill)",
+                self.fp8_prefill_mode or "FA2 BF16",
+            )
+        else:
+            logger.warning("Jina v3.5 attention mode: paged KV (%s)", reason)
         self.projector = nn.Sequential(
             nn.Linear(config.hidden_size, config.hidden_size // 2, bias=False),
             nn.ReLU(),
@@ -93,20 +101,3 @@ class JinaRerankerV35(JinaForRanking):
 
     def get_model_state_cls(self) -> type[DefaultModelState]:
         return PrefillModelState if self.pool_free_prefill else DefaultModelState
-
-    def _enable_pool_free_prefill(self, mode: FP8PrefillMode | None) -> bool:
-        attentions = [layer.self_attn for layer in self.model.layers]
-        if mode is None:
-            reason = paged_kv_layer_reason([module.attn for module in attentions])
-            if reason is not None:
-                logger.warning("Jina v3.5 attention mode: paged KV (%s)", reason)
-                return False
-        for module in attentions:
-            module.attn = replace_with_pool_free_attention(
-                module.attn, self.vllm_config, mode
-            )
-        logger.info(
-            "Jina v3.5 attention mode: pool-free %s (full-prompt prefill)",
-            mode or "FA2 BF16",
-        )
-        return True

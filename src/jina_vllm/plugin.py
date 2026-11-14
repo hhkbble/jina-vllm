@@ -1,3 +1,4 @@
+from .embeddings_v5_text_small import ARCH as EMBEDDINGS_V5_TEXT_SMALL_ARCH
 from .reranker_v35.contract import ARCH as RERANKER_V35_ARCH
 
 PLUGIN_NAME = "jina_vllm"
@@ -18,6 +19,10 @@ def register() -> None:
 
     ModelRegistry.register_model(
         RERANKER_V35_ARCH, "jina_vllm.reranker_v35.model:JinaRerankerV35"
+    )
+    ModelRegistry.register_model(
+        EMBEDDINGS_V5_TEXT_SMALL_ARCH,
+        "jina_vllm.embeddings_v5_text_small.model:JinaEmbeddingsV5TextSmall",
     )
     MODELS_CONFIG_MAP[RERANKER_V35_ARCH] = RerankerV35Config
     register_prefill_modes()

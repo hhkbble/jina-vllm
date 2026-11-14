@@ -98,6 +98,28 @@ VLLM_PLUGINS='' vllm serve "${embedding[@]}" --hf-overrides "$embedding_hf" \
   "${embedding_fa2[@]}" "${embedding_paged[@]}" "${embedding_w8a8[@]}"
 ```
 
+### Text Small pool-free FA2
+
+Select the plugin architecture on the same snapshot. The service keeps the
+native embedding API, task adapter loader, and LAST pooler.
+
+```bash
+export VLLM_PLUGINS=jina_vllm VLLM_USE_V2_MODEL_RUNNER=1
+embedding_pool_free_hf='{"architectures":["JinaEmbeddingsV5TextSmall"],"jina_task":"retrieval","matryoshka_dimensions":[32,64,128,256,512,768,1024]}'
+embedding_pool_free=(
+  --no-enable-chunked-prefill --max-num-batched-tokens 131072
+  --long-prefill-token-threshold 0
+)
+vllm serve "${embedding[@]}" --hf-overrides "$embedding_pool_free_hf" \
+  "${embedding_fa2[@]}" "${embedding_pool_free[@]}"
+```
+
+The 131,072-token batch and scheduler budgets cover four 32,768-token
+inputs in one worker step. The scheduler budget inherits the batch budget.
+Keep prefix caching disabled and let vLLM derive the KV allocation. Check
+the startup logs for pool-free FA2 selection and zero physical KV allocation
+across all 28 layers. Ineligible FA2 configurations use paged KV and log the reason.
+
 ## Serve Jina Reranker v3.5
 
 Use revision `e8a93f33f0b22108f8c2364f8484ce3422552fbc` for this model.

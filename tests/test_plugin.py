@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from jina_vllm.embeddings_v5_text_small import ARCH as EMBEDDINGS_ARCH
 from jina_vllm.plugin import PLUGIN_NAME, JinaEndpointPlugin
 from jina_vllm.reranker_v35.contract import ARCH
 
@@ -38,6 +39,9 @@ def test_architecture_requires_explicit_allowlist(allowed, registered):
         "from vllm.model_executor.models import ModelRegistry; "
         "from vllm.model_executor.models.config import MODELS_CONFIG_MAP; "
         f"assert ({ARCH!r} in ModelRegistry.get_supported_archs()) == {registered!r}; "
+        f"assert ({EMBEDDINGS_ARCH!r} in ModelRegistry.get_supported_archs()) "
+        f"== {registered!r}; "
+        "assert 'JinaEmbeddingsV5Model' in ModelRegistry.get_supported_archs(); "
         f"assert ({ARCH!r} in MODELS_CONFIG_MAP) == {registered!r}"
     )
     env = dict(os.environ)
@@ -85,9 +89,10 @@ def test_fp8_backend_survives_spawn_deserialization():
 
 
 @pytest.mark.asyncio
-async def test_endpoint_leaves_other_architecture_untouched():
+@pytest.mark.parametrize("architecture", ["Other", EMBEDDINGS_ARCH])
+async def test_endpoint_leaves_other_architecture_untouched(architecture):
     handler = object()
     state = SimpleNamespace(serving_scores=handler)
-    engine = SimpleNamespace(model_config=SimpleNamespace(architecture="Other"))
+    engine = SimpleNamespace(model_config=SimpleNamespace(architecture=architecture))
     await JinaEndpointPlugin().init_state(engine, state, None)
     assert state.serving_scores is handler
