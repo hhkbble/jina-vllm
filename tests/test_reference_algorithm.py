@@ -5,8 +5,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from jina_vllm.contract import DOC_TOKEN_ID, MAX_LENGTH, validate_tokenizer
-from jina_vllm.ranking import format_prompt, merge_request, prepare_request
+from jina_vllm.reranker_v35.contract import DOC_TOKEN_ID, MAX_LENGTH, validate_tokenizer
+from jina_vllm.reranker_v35.ranking import format_prompt, merge_request, prepare_request
 
 
 def make_oracle(module, tokenizer):

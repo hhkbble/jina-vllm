@@ -8,15 +8,15 @@ from vllm.utils import random_uuid
 from vllm.utils.async_utils import make_async
 
 from .contract import ARCH, validate_model_contract
-from .io_processor import Jina35ScoringIOProcessor
+from .io_processor import RerankerV35ScoringIOProcessor
 from .ranking import RankingPlan
 
 # vLLM configures handlers on its own logging namespace.
-logger = init_logger("vllm.jina_vllm.serving")
+logger = init_logger("vllm.jina_vllm.reranker_v35.serving")
 
 
 @dataclass(kw_only=True)
-class Jina35ServeContext(PoolingServeContext):
+class RerankerV35ServeContext(PoolingServeContext):
     plan: RankingPlan | None = None
 
 
@@ -66,13 +66,13 @@ async def _merge_blocks(iterators):
         await _close_iterators(iterators)
 
 
-class Jina35ServingScores(ServingScores):
+class RerankerV35ServingScores(ServingScores):
     def init_io_processor(self, *args, **kwargs):
-        return Jina35ScoringIOProcessor(*args, **kwargs)
+        return RerankerV35ScoringIOProcessor(*args, **kwargs)
 
     async def _init_ctx(self, io_processor, request, raw_request=None):
         base = await super()._init_ctx(io_processor, request, raw_request)
-        return Jina35ServeContext(
+        return RerankerV35ServeContext(
             **{
                 field.name: getattr(base, field.name)
                 for field in fields(PoolingServeContext)
@@ -165,11 +165,11 @@ async def install_serving(engine_client, state) -> None:
         return
     validate_model_contract(engine_client.vllm_config)
     old = getattr(state, "serving_scores", None)
-    if isinstance(old, Jina35ServingScores):
+    if isinstance(old, RerankerV35ServingScores):
         return
     if not isinstance(old, ServingScores):
         raise RuntimeError("Expected native ServingScores")
-    state.serving_scores = Jina35ServingScores(
+    state.serving_scores = RerankerV35ServingScores(
         engine_client,
         old.models,
         supported_tasks=await engine_client.get_supported_tasks(),

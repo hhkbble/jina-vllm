@@ -14,9 +14,8 @@ from vllm.model_executor.models.qwen3 import Qwen3DecoderLayer, Qwen3Model
 from vllm.model_executor.models.utils import extract_layer_index, maybe_prefix
 from vllm.v1.worker.gpu.model_states.default import DefaultModelState
 
-from .config import FP8PrefillMode, fp8_prefill_mode
-from .contract import validate_model_contract
-from .prefill import (
+from jina_vllm.config import FP8PrefillMode, fp8_prefill_mode
+from jina_vllm.prefill import (
     PrefillModelState,
     fp8_prefill_reason,
     paged_kv_layer_reason,
@@ -24,10 +23,12 @@ from .prefill import (
     replace_with_pool_free_attention,
 )
 
-logger = init_logger("vllm.jina_vllm.model")
+from .contract import validate_model_contract
+
+logger = init_logger("vllm.jina_vllm.reranker_v35.model")
 
 
-class Jina35DecoderLayer(Qwen3DecoderLayer):
+class RerankerV35DecoderLayer(Qwen3DecoderLayer):
     def __init__(
         self,
         config: Qwen3Config,
@@ -47,8 +48,8 @@ class Jina35DecoderLayer(Qwen3DecoderLayer):
         )
 
 
-class Jina35Backbone(Qwen3Model):
-    decoder_layer_type = Jina35DecoderLayer
+class RerankerV35Backbone(Qwen3Model):
+    decoder_layer_type = RerankerV35DecoderLayer
 
 
 class JinaRerankerV35(JinaForRanking):
@@ -75,7 +76,7 @@ class JinaRerankerV35(JinaForRanking):
                 )
         if reason is not None:
             logger.warning("Jina v3.5 attention mode: paged KV (%s)", reason)
-        self.model = Jina35Backbone(
+        self.model = RerankerV35Backbone(
             vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model")
         )
         self.pool_free_prefill = reason is None and self._enable_pool_free_prefill(

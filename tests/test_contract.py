@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from transformers import AutoConfig
 
-from jina_vllm.contract import validate_model_contract
+from jina_vllm.reranker_v35.contract import validate_model_contract
 
 
 @pytest.fixture

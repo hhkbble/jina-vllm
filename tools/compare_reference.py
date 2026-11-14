@@ -11,8 +11,15 @@ import torch
 from huggingface_hub import snapshot_download
 
 from jina_vllm.config import FP8_PREFILL_BACKEND, FP8_PREFILL_MODES
-from jina_vllm.contract import LAYER_TYPES, MAX_LENGTH, MODEL_ID, REVISION
-from jina_vllm.ranking import merge_request, prepare_request
+from jina_vllm.plugin import PLUGIN_NAME
+from jina_vllm.reranker_v35.contract import (
+    ARCH,
+    LAYER_TYPES,
+    MAX_LENGTH,
+    MODEL_ID,
+    REVISION,
+)
+from jina_vllm.reranker_v35.ranking import merge_request, prepare_request
 
 
 def model_directory():
@@ -26,7 +33,7 @@ def engine_kwargs(args):
         model=model_directory(),
         model_impl="vllm",
         runner="pooling",
-        hf_overrides={"architectures": ["JinaRerankerV35"], "embedding_size": 512},
+        hf_overrides={"architectures": [ARCH], "embedding_size": 512},
         pooler_config={"task": "token_embed"},
         dtype="bfloat16",
         kv_cache_dtype=getattr(args, "kv_cache_dtype", None) or "bfloat16",
@@ -131,7 +138,7 @@ def read_workload(path):
 def native_run(args, cases):
     from vllm import LLM, PoolingParams
 
-    os.environ["VLLM_PLUGINS"] = "jina_reranker_v35"
+    os.environ["VLLM_PLUGINS"] = PLUGIN_NAME
     os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
     start = time.perf_counter()
     llm = LLM(**engine_kwargs(args))
@@ -288,7 +295,6 @@ def main():
         default="flex_attention",
         choices=["sdpa", "flex_attention", "flash_attention_2"],
     )
-    parser.add_argument("--split", choices=["calibration", "heldout"])
     args = parser.parse_args()
     if args.kv_cache_dtype and not args.pool_free:
         parser.error("--kv-cache-dtype requires --pool-free")
@@ -301,8 +307,6 @@ def main():
     if args.batch_tokens is None:
         args.batch_tokens = 8192
     cases = read_workload(args.workload)
-    if args.split:
-        cases = [case for case in cases if case.get("split") == args.split]
     result = (hf_run if args.mode == "hf" else native_run)(args, cases)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(result, args.output)

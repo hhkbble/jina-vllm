@@ -23,15 +23,6 @@ from .config import FP8_PREFILL_BACKEND, FP8PrefillMode
 logger = init_logger("vllm.jina_vllm.prefill")
 
 
-def __getattr__(name: str):
-    # Older local validation scripts import these BF16 implementations here.
-    if name in ("PrefillImpl", "PrefillBackend"):
-        from . import fa2_prefill
-
-        return getattr(fa2_prefill, name)
-    raise AttributeError(name)
-
-
 def paged_kv_reason(
     config: VllmConfig, mode: FP8PrefillMode | None = None
 ) -> str | None:
@@ -150,7 +141,7 @@ class PrefillMetadata:
 
 class PrefillModelState(DefaultModelState):
     def get_additional_cg_support(self) -> tuple[AttentionCGSupport, str]:
-        return AttentionCGSupport.NEVER, "Jina v3.5 pool-free attention"
+        return AttentionCGSupport.NEVER, "Jina pool-free attention"
 
     def initialize_kv_cache(
         self, kv_cache_config: KVCacheConfig, block_tables: BlockTables
@@ -162,9 +153,9 @@ class PrefillModelState(DefaultModelState):
             or kv_cache_config.kv_cache_tensors
             or any(layer.kv_cache.numel() for layer in layers.values())
         ):
-            raise RuntimeError("Jina v3.5 pool-free prefill received a KV pool")
+            raise RuntimeError("Jina pool-free prefill received a KV pool")
         logger.info(
-            "Jina v3.5 pool-free prefill allocation: kv_cache_tensors=0, "
+            "Jina pool-free prefill allocation: kv_cache_tensors=0, "
             "kv_cache_groups=0, layer_kv_elements=0 (%d layers)",
             len(layers),
         )
@@ -181,7 +172,7 @@ class PrefillModelState(DefaultModelState):
             input_batch.num_computed_tokens_np.any()
             or (input_batch.num_scheduled_tokens != input_batch.prefill_len_np).any()
         ):
-            raise RuntimeError("Jina v3.5 pool-free prefill requires complete prompts")
+            raise RuntimeError("Jina pool-free prefill requires complete prompts")
 
     def prepare_attn(
         self,

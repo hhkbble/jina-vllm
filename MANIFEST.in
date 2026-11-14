@@ -1,7 +1,7 @@
 include README.md AGENTS.md pyproject.toml uv.lock
 include .python-version .gitignore .pre-commit-config.yaml
 include .shellcheckrc
-include model-reference.json acceptance.json NOTICE
+include model-reference.json NOTICE
 recursive-include licenses *
 recursive-include scripts *.sh
 recursive-include tools *.py

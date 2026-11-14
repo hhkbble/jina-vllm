@@ -1,22 +1,29 @@
-from .contract import ARCH, PLUGIN_NAME
+from .reranker_v35.contract import ARCH as RERANKER_V35_ARCH
+
+PLUGIN_NAME = "jina_vllm"
 
 
 def register() -> None:
     from vllm import envs
-    from vllm.model_executor.models import ModelRegistry
 
     allowed = envs.VLLM_PLUGINS
-    if allowed is not None and PLUGIN_NAME in allowed:
-        from vllm.model_executor.models.config import MODELS_CONFIG_MAP
+    if allowed is None or PLUGIN_NAME not in allowed:
+        return
 
-        from .config import Jina35Config, register_prefill_modes
+    from vllm.model_executor.models import ModelRegistry
+    from vllm.model_executor.models.config import MODELS_CONFIG_MAP
 
-        ModelRegistry.register_model(ARCH, "jina_vllm.model:JinaRerankerV35")
-        MODELS_CONFIG_MAP[ARCH] = Jina35Config
-        register_prefill_modes()
+    from .config import register_prefill_modes
+    from .reranker_v35.config import RerankerV35Config
+
+    ModelRegistry.register_model(
+        RERANKER_V35_ARCH, "jina_vllm.reranker_v35.model:JinaRerankerV35"
+    )
+    MODELS_CONFIG_MAP[RERANKER_V35_ARCH] = RerankerV35Config
+    register_prefill_modes()
 
 
-class Jina35EndpointPlugin:
+class JinaEndpointPlugin:
     name = PLUGIN_NAME
     required_tasks = ("token_embed",)
 
@@ -24,8 +31,11 @@ class Jina35EndpointPlugin:
         pass
 
     async def init_state(self, engine_client, state, args) -> None:
-        if engine_client is None or engine_client.model_config.architecture != ARCH:
+        if (
+            engine_client is None
+            or engine_client.model_config.architecture != RERANKER_V35_ARCH
+        ):
             return
-        from .serving import install_serving
+        from .reranker_v35.serving import install_serving
 
         await install_serving(engine_client, state)

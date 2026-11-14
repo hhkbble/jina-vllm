@@ -1,1 +1,1 @@
-"""Reproducible acceptance and measurement commands (not installed in the wheel)."""
+"""Development checks and measurement commands for source checkouts."""

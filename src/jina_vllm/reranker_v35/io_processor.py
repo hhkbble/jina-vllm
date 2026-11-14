@@ -11,10 +11,10 @@ from .contract import validate_tokenizer
 from .ranking import merge_request, prepare_request
 
 if TYPE_CHECKING:
-    from .serving import Jina35ServeContext
+    from .serving import RerankerV35ServeContext
 
 
-class Jina35ScoringIOProcessor(ScoringIOProcessor):
+class RerankerV35ScoringIOProcessor(ScoringIOProcessor):
     name = "jina-v35-scoring"
     pooling_task = "token_embed"
 
@@ -22,7 +22,7 @@ class Jina35ScoringIOProcessor(ScoringIOProcessor):
         super().__init__(*args, **kwargs)
         validate_tokenizer(self.tokenizer)
 
-    def get_request_factory_online(self, ctx: "Jina35ServeContext"):
+    def get_request_factory_online(self, ctx: "RerankerV35ServeContext"):
         request = ctx.request
         self._validate_options(request)
         if ctx.lora_request is not None:
@@ -83,7 +83,7 @@ class Jina35ScoringIOProcessor(ScoringIOProcessor):
                 "Jina v3.5 uses a fixed template without instruction"
             )
 
-    def post_process_online(self, ctx: "Jina35ServeContext") -> None:
+    def post_process_online(self, ctx: "RerankerV35ServeContext") -> None:
         plan = ctx.plan
         if plan is None:
             raise RuntimeError("Jina request plan is missing")

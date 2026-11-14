@@ -2,10 +2,9 @@
 
 ## Scope and design
 
-Read `docs/jina-reranker-v35-vllm-out-of-tree-design.md` before implementation,
-architecture changes, or validation planning. It defines the intended out-of-tree
-vLLM integration and acceptance criteria. Documents and reports live in `docs/`,
-which is deliberately ignored by Git; preserve existing local documents.
+Read `docs/jina-vllm-reranker-v35-design.md` before implementation, architecture
+changes, or validation planning. It covers the out-of-tree integration and
+reranker contract. Preserve reports and design notes in ignored `docs/`.
 For changes to pool-free prefill, also read `docs/pool-free-prefill.md` for
 the pinned V2 runner contracts and GPU verification commands.
 For `JINA_FP8_PREFILL`, see `docs/pool-free-fp8-design-plan.md` and
@@ -64,9 +63,10 @@ end of implementation. Check the working tree and preserve unrelated changes.
 Run checks appropriate to each milestone and report what was actually verified.
 Run `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest`
 for code milestones; check Bash with `uv run shellcheck -s bash scripts/*.sh`.
-Real GPU acceptance is opt-in and runs separately; set
-`JINA_GPU_ARTIFACTS` to trusted receipts from the offline tools. See `uv run python -m tools.compare_reference --help` and local
-`docs/acceptance-report.md` for commands and current gate status.
+For real GPU validation, use the native CLI and offline receipt commands in
+README. Set `JINA_GPU_ARTIFACTS` to trusted native receipts for the model
+structure and kernel trace checks. Run final model quality evaluation before
+release.
 Use a child logger under `vllm.jina_vllm` for native startup/cleanup receipts.
-Distinguish environment/import checks from model, HTTP, numerical, and performance
-acceptance; only claim results supported by executed validation.
+Report executed environment, model, HTTP, kernel and performance checks
+separately.

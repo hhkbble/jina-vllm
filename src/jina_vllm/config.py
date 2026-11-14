@@ -2,20 +2,19 @@ from functools import cache, wraps
 from typing import Literal, cast
 
 import torch
-from vllm.config import CompilationMode, VllmConfig
+from vllm.config import VllmConfig
 from vllm.config.cache import register_kv_cache_dtype
-from vllm.model_executor.models.config import VerifyAndUpdateConfig
-from vllm.platforms import current_platform
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 from vllm.v1.kv_cache_interface import KVQuantMode
 
-from .contract import ARCH
+from .reranker_v35.contract import ARCH as RERANKER_V35_ARCH
 
 FP8PrefillMode = Literal["fp8_per_token_head_p_row", "fp8_per_token_head_p_tile"]
 FP8_P_ROW = "fp8_per_token_head_p_row"
 FP8_P_TILE = "fp8_per_token_head_p_tile"
 FP8_PREFILL_MODES = (FP8_P_ROW, FP8_P_TILE)
 FP8_PREFILL_BACKEND = "JINA_FP8_PREFILL"
+FP8_PREFILL_ARCHITECTURES = frozenset({RERANKER_V35_ARCH})
 
 
 def restore_fp8_backend() -> AttentionBackendEnum:
@@ -81,30 +80,11 @@ def validate_prefill_selection(config: VllmConfig) -> None:
     if mode is None:
         choices = " or ".join(FP8_PREFILL_MODES)
         raise ValueError(f"{FP8_PREFILL_BACKEND} requires kv-cache-dtype {choices}")
-    if config.model_config is None or config.model_config.architecture != ARCH:
-        raise ValueError(f"kv-cache-dtype={mode} requires {ARCH}")
+    if (
+        config.model_config is None
+        or config.model_config.architecture not in FP8_PREFILL_ARCHITECTURES
+    ):
+        architectures = ", ".join(sorted(FP8_PREFILL_ARCHITECTURES))
+        raise ValueError(f"kv-cache-dtype={mode} requires {architectures}")
     if attention.backend_per_kind:
         raise ValueError(f"{FP8_PREFILL_BACKEND} requires one backend for all layers")
-
-
-class Jina35Config(VerifyAndUpdateConfig):
-    @staticmethod
-    def verify_and_update_config(vllm_config: VllmConfig) -> None:
-        compilation = vllm_config.compilation_config
-        passes = compilation.pass_config
-        if passes.fuse_act_quant is None:
-            passes.fuse_act_quant = False
-        if passes.fuse_norm_quant is None:
-            passes.fuse_norm_quant = False
-        if passes.enable_qk_norm_rope_fusion is None:
-            ops = compilation.custom_ops
-            # Mirror the custom RoPE selection used by the pinned vLLM
-            # CompilationConfig when the QK pass is explicitly enabled.
-            passes.enable_qk_norm_rope_fusion = (
-                (current_platform.is_cuda_alike() or current_platform.is_xpu())
-                and "-rotary_embedding" not in ops
-                and not vllm_config.model_config.enforce_eager
-                and compilation.mode in (None, CompilationMode.VLLM_COMPILE)
-            )
-            if passes.enable_qk_norm_rope_fusion and "+rotary_embedding" not in ops:
-                ops.append("+rotary_embedding")

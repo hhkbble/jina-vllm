@@ -13,13 +13,14 @@ from vllm.v1.attention.backends.flash_attn import (
 from vllm.v1.attention.backends.registry import AttentionBackendEnum
 from vllm.v1.kv_cache_interface import KVQuantMode
 
-from jina_vllm.config import Jina35Config, fp8_prefill_mode, register_prefill_modes
+from jina_vllm.config import fp8_prefill_mode, register_prefill_modes
 from jina_vllm.prefill import (
     PrefillModelState,
     fp8_prefill_reason,
     paged_kv_layer_reason,
     paged_kv_reason,
 )
+from jina_vllm.reranker_v35.config import RerankerV35Config
 
 
 @pytest.fixture
@@ -113,13 +114,15 @@ def test_explicit_fp8_config_and_fusion_defaults(monkeypatch, mode):
     assert handler.quant_mode() == KVQuantMode.NONE
     assert handler.torch_dtype() == torch.bfloat16
     assert fp8_prefill_mode(cache.cache_dtype) == mode
-    monkeypatch.setattr("jina_vllm.config.current_platform.is_cuda_alike", lambda: True)
+    monkeypatch.setattr(
+        "jina_vllm.reranker_v35.config.current_platform.is_cuda_alike", lambda: True
+    )
     compilation = CompilationConfig(pass_config={"fuse_norm_quant": True})
     config = SimpleNamespace(
         model_config=SimpleNamespace(enforce_eager=False),
         compilation_config=compilation,
     )
-    Jina35Config.verify_and_update_config(config)
+    RerankerV35Config.verify_and_update_config(config)
     assert compilation.pass_config.enable_qk_norm_rope_fusion is True
     assert compilation.pass_config.fuse_act_quant is False
     assert compilation.pass_config.fuse_norm_quant is True
@@ -153,12 +156,14 @@ def test_registered_fp8_selection_rejects_invalid_pair(
 
 
 def test_explicitly_disabled_qk_fusion_and_missing_fp8_option(monkeypatch):
-    monkeypatch.setattr("jina_vllm.config.current_platform.is_cuda_alike", lambda: True)
+    monkeypatch.setattr(
+        "jina_vllm.reranker_v35.config.current_platform.is_cuda_alike", lambda: True
+    )
     compilation = CompilationConfig(
         pass_config={"enable_qk_norm_rope_fusion": False, "fuse_act_quant": True}
     )
     config = SimpleNamespace(compilation_config=compilation)
-    Jina35Config.verify_and_update_config(config)
+    RerankerV35Config.verify_and_update_config(config)
     assert fp8_prefill_mode("fp8_per_token_head") is None
     assert compilation.pass_config.enable_qk_norm_rope_fusion is False
     assert compilation.pass_config.fuse_act_quant is True

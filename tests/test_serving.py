@@ -19,9 +19,9 @@ from vllm.renderers.chat_utils import ChatTemplateConfig
 from vllm.renderers.hf import HfRenderer
 from vllm.tokenizers import cached_tokenizer_from_config
 
-from jina_vllm.contract import DOC_TOKEN_ID
-from jina_vllm.plugin import register
-from jina_vllm.serving import Jina35ServingScores, install_serving
+from jina_vllm.plugin import PLUGIN_NAME, register
+from jina_vllm.reranker_v35.contract import DOC_TOKEN_ID
+from jina_vllm.reranker_v35.serving import RerankerV35ServingScores, install_serving
 
 
 class FakeEngine:
@@ -94,7 +94,7 @@ class FakeEngine:
 def config_renderer(snapshot):
     import os
 
-    os.environ["VLLM_PLUGINS"] = "jina_reranker_v35"
+    os.environ["VLLM_PLUGINS"] = PLUGIN_NAME
     register()
     mc = ModelConfig(
         model=str(snapshot),
@@ -118,9 +118,9 @@ async def serving(config_renderer):
     config, renderer = config_renderer
     engine = FakeEngine(config, renderer)
     models = OpenAIServingModels(
-        engine, [BaseModelPath("jina35", config.model_config.model)]
+        engine, [BaseModelPath("local-reranker", config.model_config.model)]
     )
-    handler = Jina35ServingScores(
+    handler = RerankerV35ServingScores(
         engine,
         models,
         supported_tasks=("token_embed",),
@@ -145,12 +145,15 @@ async def serving(config_renderer):
 @pytest.mark.parametrize("top_n", [None, 0, 1, 5])
 async def test_native_rerank_formatter(serving, path, top_n):
     engine, handler, client = serving
-    body = dict(model="jina35", query="query", documents=["original", "same", ""])
+    body = dict(
+        model="local-reranker", query="query", documents=["original", "same", ""]
+    )
     if top_n is not None:
         body["top_n"] = top_n
     response = await client.post(path, json=body)
     assert response.status_code == 200, response.text
     data = response.json()
+    assert data["model"] == body["model"]
     count = 1 if top_n == 1 else 3
     assert [r["index"] for r in data["results"]] == list(range(count))
     assert [r["document"]["text"] for r in data["results"]] == body["documents"][:count]
@@ -301,7 +304,7 @@ async def test_install_is_scoped_and_idempotent(serving):
     )
     state = SimpleNamespace(serving_scores=old)
     await install_serving(engine, state)
-    assert isinstance(state.serving_scores, Jina35ServingScores)
+    assert isinstance(state.serving_scores, RerankerV35ServingScores)
     replacement = state.serving_scores
     await install_serving(engine, state)
     assert state.serving_scores is replacement
@@ -309,7 +312,7 @@ async def test_install_is_scoped_and_idempotent(serving):
 
 @pytest.mark.asyncio
 async def test_install_rejects_unsupported_version(serving, monkeypatch):
-    from jina_vllm import contract
+    from jina_vllm.reranker_v35 import contract
 
     engine, handler, _ = serving
     state = SimpleNamespace(serving_scores=handler)
@@ -402,7 +405,8 @@ def test_plugin_startup_logs_use_native_handlers():
             "from vllm.logger import configure_logging; "
             "from vllm.config import LoggingConfig; "
             "configure_logging(LoggingConfig()); "
-            "from jina_vllm.serving import logger; logger.info('plugin-log-receipt')",
+            "from jina_vllm.reranker_v35.serving import logger; "
+            "logger.info('plugin-log-receipt')",
         ],
         capture_output=True,
         text=True,
@@ -415,7 +419,7 @@ def test_plugin_startup_logs_use_native_handlers():
 async def test_drain_failure_logs_without_replacing_cancellation(caplog):
     import logging
 
-    from jina_vllm.serving import _merge_blocks, logger
+    from jina_vllm.reranker_v35.serving import _merge_blocks, logger
 
     started = asyncio.Event()
 

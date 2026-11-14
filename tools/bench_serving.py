@@ -11,7 +11,8 @@ import numpy as np
 import pynvml
 from transformers import AutoTokenizer
 
-from jina_vllm.ranking import prepare_request
+from jina_vllm.reranker_v35.contract import MAX_LENGTH
+from jina_vllm.reranker_v35.ranking import prepare_request
 from tools.compare_reference import model_directory, read_workload
 
 
@@ -45,7 +46,7 @@ async def measure(args):
         samples = []
         for case in selected:
             start = time.perf_counter()
-            prepare_request([(case["query"], case["documents"])], tokenizer, 131072)
+            prepare_request([(case["query"], case["documents"])], tokenizer, MAX_LENGTH)
             samples.append(time.perf_counter() - start)
         preprocessing[name] = {
             "p50_seconds": float(np.median(samples)),
@@ -63,7 +64,6 @@ async def measure(args):
             response = await client.post(
                 "/rerank",
                 json={
-                    "model": "jina35",
                     "query": case["query"],
                     "documents": case["documents"],
                 },

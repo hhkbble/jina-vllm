@@ -9,7 +9,7 @@ import pytest
 from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
-from jina_vllm.contract import MODEL_ID, REVISION
+from jina_vllm.reranker_v35.contract import MODEL_ID, REVISION
 
 
 @pytest.fixture(scope="session")

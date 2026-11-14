@@ -1,7 +1,6 @@
 from importlib.metadata import version
 
 ARCH = "JinaRerankerV35"
-PLUGIN_NAME = "jina_reranker_v35"
 MODEL_ID = "jinaai/jina-reranker-v3.5"
 REVISION = "e8a93f33f0b22108f8c2364f8484ce3422552fbc"
 MAX_LENGTH = 131072

@@ -3,9 +3,9 @@ requires = ["setuptools>=77,<81"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jina-reranker-v35-vllm"
+name = "jina-vllm"
 version = "0.1.0"
-description = "Out-of-tree vLLM support for Jina Reranker v3.5"
+description = "Out-of-tree vLLM support for Jina models"
 readme = "README.md"
 license-files = ["NOTICE", "licenses/*"]
 requires-python = ">=3.12,<3.13"
@@ -22,10 +22,10 @@ dev = [
 ]
 
 [project.entry-points."vllm.general_plugins"]
-jina_reranker_v35 = "jina_vllm.plugin:register"
+jina_vllm = "jina_vllm.plugin:register"
 
 [project.entry-points."vllm.endpoint_plugins"]
-jina_reranker_v35 = "jina_vllm.plugin:Jina35EndpointPlugin"
+jina_vllm = "jina_vllm.plugin:JinaEndpointPlugin"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -60,4 +60,4 @@ testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra"
 asyncio_default_fixture_loop_scope = "function"
-markers = ["gpu: real model and GPU acceptance (explicit opt-in)"]
+markers = ["gpu: real model and CUDA checks (explicit opt-in)"]
