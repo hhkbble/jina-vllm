@@ -21,6 +21,7 @@ from jina_vllm.prefill import (
     install_pool_free_attention,
     paged_kv_reason,
 )
+from jina_vllm.rope import verify_rotary_cache
 
 from .contract import validate_model_contract
 
@@ -76,6 +77,7 @@ class JinaRerankerV35(JinaForRanking):
         self.model = RerankerV35Backbone(
             vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model")
         )
+        verify_rotary_cache(vllm_config.model_config, self.model.layers)
         if reason is None:
             reason = install_pool_free_attention(
                 [layer.self_attn for layer in self.model.layers],

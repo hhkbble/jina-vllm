@@ -143,6 +143,22 @@ normalized vectors. With BF16 Linear, worker peak allocated memory was
 Peak reserved memory was 6.76 GiB for FA2 and 7.26 GiB for both FP8 modes.
 The local measurement report is `docs/embeddings-v5-text-small-validation.md`.
 
+### Text Small YaRN
+
+Use the plugin architecture, the same retrieval adapter, and the native
+Hugging Face override for RoPE. For example, serve inputs up to 32,769 tokens
+with 2× YaRN and the existing pool-free FA2 example:
+
+```bash
+embedding_yarn='{"architectures":["JinaEmbeddingsV5TextSmall"],"jina_task":"retrieval","matryoshka_dimensions":[32,64,128,256,512,768,1024],"max_position_embeddings":65536,"rope_parameters":{"rope_type":"yarn","rope_theta":3500000,"original_max_position_embeddings":32768,"factor":2.0}}'
+vllm serve "${embedding[@]}" --max-model-len 32769 --hf-overrides "$embedding_yarn" \
+  "${embedding_fa2[@]}" "${embedding_pool_free[@]}"
+```
+
+To enable YaRN at the native 32,768-token service limit, omit the
+`max_position_embeddings` override and keep `--max-model-len 32768`.
+Omit `rope_parameters` to use the checkpoint's RoPE.
+
 ## Serve Jina Reranker v3.5
 
 Use revision `e8a93f33f0b22108f8c2364f8484ce3422552fbc` for this model.
@@ -268,6 +284,25 @@ runtime-tested device. The kernel also has E4M3 compiler receipts for SM89,
 SM90, SM100, SM103 and SM121. Historical measurements are in
 `docs/pool-free-fp8-acceptance.md`.
 
+### Reranker YaRN
+
+Use the checkpoint's base theta and original context in the native override.
+This example configures a 2× YaRN cache and serves up to 131,073 tokens:
+
+```bash
+reranker_yarn='{"architectures":["JinaRerankerV35"],"embedding_size":512,"max_position_embeddings":262144,"rope_parameters":{"rope_type":"yarn","rope_theta":1000000,"original_max_position_embeddings":131072,"factor":2.0}}'
+vllm serve "${reranker[@]}" "${fa2[@]}" "${pool_free[@]}" \
+  --hf-overrides "$reranker_yarn" --max-model-len 131073 \
+  --max-num-batched-tokens 131073 --max-num-scheduled-tokens 131073
+```
+
+The settings for RoPE and service length are independent. To enable YaRN with
+the native 131,072-token length, omit the `max_position_embeddings` override
+and use the original length and token budgets. Omit `rope_parameters` to use
+the checkpoint's RoPE. Each no-pool token budget must cover the service length.
+For both plugin models, FP8 prefill supports a scheduled budget of up to
+524,288 tokens per worker step.
+
 ## Requests
 
 Native `/rerank`, `/v1/rerank`, `/v2/rerank`, `/score` and `/v1/score` are used
@@ -361,3 +396,37 @@ configuration for its CPU planning check.
 Both commands expose their options with `--help`. Workload JSONL rows contain
 `id`, `query`, and a list of `documents`. Local design notes and measurement
 reports live in ignored `docs/`.
+
+### YaRN probes
+
+Run one offline engine at a time with the fixed checkpoints. This checks the
+same reranker prompts with and without YaRN, then executes one extended block:
+
+```bash
+source scripts/env.sh
+export VLLM_USE_V2_MODEL_RUNNER=1
+run_dir=.local/output/yarn-probes
+uv run python -m tools.make_reranker_probes --include-extended \
+  --output "$run_dir/workload.jsonl"
+head -n 2 "$run_dir/workload.jsonl" > "$run_dir/paired.jsonl"
+tail -n 1 "$run_dir/workload.jsonl" > "$run_dir/extended.jsonl"
+uv run python -m tools.compare_reference --mode bf16 --pool-free \
+  --workload "$run_dir/paired.jsonl" --output "$run_dir/reranker-default.pt"
+uv run python -m tools.compare_reference --mode bf16 --pool-free \
+  --workload "$run_dir/paired.jsonl" --output "$run_dir/reranker-yarn.pt" \
+  --hf-overrides '{"rope_parameters":{"rope_type":"yarn","rope_theta":1000000,"original_max_position_embeddings":131072,"factor":2.0}}'
+uv run python -m tools.compare_reference --mode bf16 --pool-free \
+  --workload "$run_dir/extended.jsonl" --output "$run_dir/reranker-extended.pt" \
+  --max-model-len 131073 \
+  --hf-overrides '{"max_position_embeddings":262144,"rope_parameters":{"rope_type":"yarn","rope_theta":1000000,"original_max_position_embeddings":131072,"factor":2.0}}'
+for mode in default yarn extended; do
+  uv run python -m tools.check_embedding_rope --mode "$mode" \
+    --output "$run_dir/text-small-$mode.json"
+done
+```
+
+The Text Small probe uses native `LLM.embed` and the same token IDs in the
+first two modes. Compare the prompt IDs or hashes, cache rows, and outputs in
+the two native-length receipts. The extended probes use BF16 pool-free FA2
+with inputs of 131,073 and 32,769 tokens respectively. Both offline tools
+inspect the worker using vLLM's pickle-based callable transport.

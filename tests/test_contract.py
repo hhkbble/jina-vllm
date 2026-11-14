@@ -25,7 +25,11 @@ def model_contract(snapshot):
     config = AutoConfig.from_pretrained(snapshot, local_files_only=True)
     config.embedding_size = 512
     return SimpleNamespace(
-        model_config=SimpleNamespace(hf_config=config, disable_sliding_window=False),
+        model_config=SimpleNamespace(
+            hf_config=config,
+            disable_sliding_window=False,
+            max_model_len=131072,
+        ),
         parallel_config=SimpleNamespace(
             tensor_parallel_size=1, pipeline_parallel_size=1
         ),
@@ -49,12 +53,49 @@ def test_normalized_rope_and_export_metadata(model_contract):
         ("layer_types", ["full_attention"] * 28),
         ("is_causal", False),
         ("max_window_layers", 16),
-        ("rope_parameters", {"rope_theta": 10000, "rope_type": "default"}),
     ],
 )
 def test_model_semantic_mismatches(model_contract, field, value):
     setattr(model_contract.model_config.hf_config, field, value)
     with pytest.raises(ValueError, match="contract"):
+        validate_model_contract(model_contract)
+
+
+@pytest.mark.parametrize("engine_limit", [131072, 131073])
+def test_yarn_reranker_contract(model_contract, engine_limit):
+    model = model_contract.model_config
+    model.max_model_len = engine_limit
+    if engine_limit > 131072:
+        model.hf_config.max_position_embeddings = 262144
+    model.hf_config.rope_parameters = {
+        "rope_type": "yarn",
+        "rope_theta": 1000000,
+        "original_max_position_embeddings": 131072,
+        "factor": 2.0,
+    }
+    validate_model_contract(model_contract)
+
+
+@pytest.mark.parametrize(
+    "override, error",
+    [
+        ({"rope_theta": 3500000}, "rope_theta=1000000"),
+        ({"original_max_position_embeddings": 32768}, "131072"),
+        ({"factor": float("inf")}, "finite"),
+        ({"factor": 1.0}, "greater than 1"),
+        ({"rope_type": "linear"}, "default or yarn"),
+        ({"beta_fast": 16}, "Jina YaRN requires"),
+    ],
+)
+def test_yarn_rejects_invalid_parameters(model_contract, override, error):
+    model_contract.model_config.hf_config.rope_parameters = {
+        "rope_type": "yarn",
+        "rope_theta": 1000000,
+        "original_max_position_embeddings": 131072,
+        "factor": 2.0,
+        **override,
+    }
+    with pytest.raises(ValueError, match=error):
         validate_model_contract(model_contract)
 
 

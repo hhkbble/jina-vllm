@@ -9,6 +9,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--include-count300", action="store_true")
+    parser.add_argument("--include-extended", action="store_true")
     args = parser.parse_args()
     cases = [
         dict(
@@ -49,6 +50,15 @@ def main():
                 id="count300",
                 query=cases[2]["query"],
                 documents=[f"Passage {i}: GPU inference." for i in range(300)],
+            )
+        )
+    if args.include_extended:
+        # 131,073 formatted tokens with the pinned reranker tokenizer.
+        cases.append(
+            dict(
+                id="extended",
+                query=" a" * 20,
+                documents=[" b" * 8192] * 15 + [" b" * 7803],
             )
         )
     args.output.parent.mkdir(parents=True, exist_ok=True)

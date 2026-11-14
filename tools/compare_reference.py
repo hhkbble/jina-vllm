@@ -40,7 +40,11 @@ def engine_kwargs(args):
         model=model_directory(),
         model_impl="vllm",
         runner="pooling",
-        hf_overrides={"architectures": [ARCH], "embedding_size": 512},
+        hf_overrides={
+            "architectures": [ARCH],
+            "embedding_size": 512,
+            **args.hf_overrides,
+        },
         pooler_config={"task": "token_embed"},
         dtype="bfloat16",
         kv_cache_dtype=getattr(args, "kv_cache_dtype", None) or "bfloat16",
@@ -136,6 +140,11 @@ def inspect_model(model):
         embedding_dtype=str(model.model.embed_tokens.weight.dtype),
         projector_dtypes=[str(p.dtype) for p in model.projector.parameters()],
         pooler_head=str(model.pooler.poolers_by_task["token_embed"].head),
+        rope_parameters=model.config.rope_parameters,
+        rotary_cache_rows=[
+            layer.self_attn.rotary_emb.cos_sin_cache.shape[0]
+            for layer in model.model.layers
+        ],
     )
 
 
@@ -300,6 +309,7 @@ def main():
     parser.add_argument("--workload", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--additional-config", type=json.loads, default={})
+    parser.add_argument("--hf-overrides", type=json.loads, default={})
     parser.add_argument("--max-model-len", type=int, default=MAX_LENGTH)
     parser.add_argument(
         "--batch-tokens", type=int, help="Paged token budget (default: 8192)"
@@ -329,7 +339,10 @@ def main():
     if args.kv_cache_dtype and not args.pool_free:
         parser.error("--kv-cache-dtype requires --pool-free")
     if args.mode == "hf" and (
-        args.pool_free or args.additional_config or args.max_model_len != MAX_LENGTH
+        args.pool_free
+        or args.additional_config
+        or args.hf_overrides
+        or args.max_model_len != MAX_LENGTH
     ):
         parser.error("HF reference mode uses the checkpoint's own configuration")
     if args.pool_free and (

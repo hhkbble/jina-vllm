@@ -233,6 +233,9 @@ def test_fp8_prefill_checks_device_and_linear_backend(monkeypatch):
         model_config=SimpleNamespace(quantization=None),
         kernel_config=SimpleNamespace(linear_backend="auto"),
         cache_config=CacheConfig(),
+        scheduler_config=SimpleNamespace(
+            max_num_scheduled_tokens=None, max_num_batched_tokens=16384
+        ),
     )
     assert "FP8 MMA" in fp8_prefill_reason(config)
     capability = (8, 9)
@@ -241,6 +244,14 @@ def test_fp8_prefill_checks_device_and_linear_backend(monkeypatch):
     assert "CUTLASS" in fp8_prefill_reason(config)
     config.kernel_config.linear_backend = "cutlass"
     assert fp8_prefill_reason(config) is None
+
+
+@pytest.mark.parametrize("scheduled", [None, 524289])
+def test_fp8_prefill_caps_effective_token_budget(prefill_config, scheduled):
+    scheduler = prefill_config.scheduler_config
+    scheduler.max_num_batched_tokens = 524289
+    scheduler.max_num_scheduled_tokens = scheduled
+    assert "524289 exceeds" in fp8_prefill_reason(prefill_config)
 
 
 def test_model_state_uses_only_real_sequence_boundaries():

@@ -12,6 +12,7 @@ from jina_vllm.prefill import (
     install_pool_free_attention,
     paged_kv_reason,
 )
+from jina_vllm.rope import validate_rope_config, verify_rotary_cache
 
 logger = init_logger("vllm.jina_vllm.embeddings_v5_text_small")
 
@@ -26,7 +27,6 @@ def validate_model_contract(vllm_config: VllmConfig) -> None:
         "num_attention_heads": 16,
         "num_key_value_heads": 8,
         "head_dim": 128,
-        "max_position_embeddings": 32768,
     }
     for field, value in expected.items():
         actual = getattr(config, field, None)
@@ -42,6 +42,7 @@ def validate_model_contract(vllm_config: VllmConfig) -> None:
     parallel = vllm_config.parallel_config
     if parallel.tensor_parallel_size != 1 or parallel.pipeline_parallel_size != 1:
         raise ValueError("Text Small requires tensor and pipeline parallel size 1")
+    validate_rope_config(model, 32768, 3500000)
 
 
 class JinaEmbeddingsV5TextSmall(JinaEmbeddingsV5DecoderModel):
@@ -54,6 +55,7 @@ class JinaEmbeddingsV5TextSmall(JinaEmbeddingsV5DecoderModel):
             if reason is not None:
                 raise ValueError(f"{mode} requires pool-free prefill: {reason}")
         super().__init__(vllm_config=vllm_config, prefix=prefix)
+        verify_rotary_cache(vllm_config.model_config, self.model.layers)
 
         if reason is None:
             attentions = [layer.self_attn for layer in self.model.layers]

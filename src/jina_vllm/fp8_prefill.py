@@ -9,6 +9,8 @@ from vllm.v1.attention.ops.triton_attention_helpers import find_seq_idx
 
 # FP8 MMA targets of the pinned Triton CUDA backend.
 FP8_DEVICE_CAPABILITIES = {(8, 9), (9, 0), (10, 0), (10, 3), (12, 0), (12, 1)}
+# The largest signed int32 packed offset is 4096 * tokens - 1.
+FP8_MAX_SCHEDULED_TOKENS = (1 << 31) // (32 * 128)
 
 
 def attention_tile(

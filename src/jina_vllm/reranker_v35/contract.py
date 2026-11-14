@@ -58,7 +58,6 @@ def validate_model_contract(vllm_config) -> None:
         "embedding_size": 512,
         "sliding_window": 1024,
         "max_window_layers": 28,
-        "max_position_embeddings": MAX_LENGTH,
         "hidden_act": "silu",
         "attention_bias": False,
         "rms_norm_eps": 1e-6,
@@ -70,9 +69,6 @@ def validate_model_contract(vllm_config) -> None:
     ]
     if tuple(config.layer_types) != LAYER_TYPES:
         errors.append("layer_types must match the official 16 sliding / 12 full layers")
-    rope = config.rope_parameters
-    if rope.get("rope_type") != "default" or rope.get("rope_theta") != 1000000:
-        errors.append("RoPE must use default scaling and theta=1000000")
     parallel = vllm_config.parallel_config
     if parallel.tensor_parallel_size != 1 or parallel.pipeline_parallel_size != 1:
         errors.append("tensor_parallel_size and pipeline_parallel_size must be 1")
@@ -85,3 +81,7 @@ def validate_model_contract(vllm_config) -> None:
         errors.append("causal attention is required")
     if errors:
         raise ValueError("Invalid Jina v3.5 model contract: " + "; ".join(errors))
+
+    from jina_vllm.rope import validate_rope_config
+
+    validate_rope_config(model, MAX_LENGTH, 1000000)
