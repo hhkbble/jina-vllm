@@ -303,6 +303,11 @@ the checkpoint's RoPE. Each no-pool token budget must cover the service length.
 For both plugin models, FP8 prefill supports a scheduled budget of up to
 524,288 tokens per worker step.
 
+For the reranker on CUDA with Inductor, setting `--max-num-batched-tokens`
+above 349,525 automatically enables vLLM's native CUDA SwiGLU to handle the
+larger activation offsets. Remove any explicit `-silu_and_mul` custom-op
+override when using this budget.
+
 ## Requests
 
 Native `/rerank`, `/v1/rerank`, `/v2/rerank`, `/score` and `/v1/score` are used

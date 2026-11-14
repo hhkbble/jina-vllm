@@ -4,6 +4,7 @@ ARCH = "JinaRerankerV35"
 MODEL_ID = "jinaai/jina-reranker-v3.5"
 REVISION = "e8a93f33f0b22108f8c2364f8484ce3422552fbc"
 MAX_LENGTH = 131072
+INTERMEDIATE_SIZE = 3072
 DEFAULT_BLOCK_SIZE = 125
 DOC_MARKER = "<|embed_token|>"
 QUERY_MARKER = "<|rerank_token|>"
@@ -51,7 +52,7 @@ def validate_model_contract(vllm_config) -> None:
         "model_type": "qwen3",
         "num_hidden_layers": 28,
         "hidden_size": 1024,
-        "intermediate_size": 3072,
+        "intermediate_size": INTERMEDIATE_SIZE,
         "num_attention_heads": 16,
         "num_key_value_heads": 8,
         "head_dim": 128,

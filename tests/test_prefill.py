@@ -3,7 +3,13 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
-from vllm.config import AttentionConfig, CacheConfig, SchedulerConfig, VllmConfig
+from vllm.config import (
+    AttentionConfig,
+    CacheConfig,
+    CompilationMode,
+    SchedulerConfig,
+    VllmConfig,
+)
 from vllm.config.cache import get_kv_cache_dtype_handler
 from vllm.config.compilation import CompilationConfig, CUDAGraphMode
 from vllm.v1.attention.backends.flash_attn import (
@@ -123,11 +129,14 @@ def test_explicit_fp8_config_and_fusion_defaults(monkeypatch, mode):
     monkeypatch.setattr(
         "jina_vllm.reranker_v35.config.current_platform.is_cuda_alike", lambda: True
     )
-    compilation = CompilationConfig(pass_config={"fuse_norm_quant": True})
+    compilation = CompilationConfig(
+        mode=CompilationMode.VLLM_COMPILE, pass_config={"fuse_norm_quant": True}
+    )
     config = SimpleNamespace(
         additional_config={},
         model_config=SimpleNamespace(enforce_eager=False),
         compilation_config=compilation,
+        scheduler_config=SimpleNamespace(max_num_batched_tokens=16_384),
     )
     RerankerV35Config.verify_and_update_config(config)
     assert compilation.pass_config.enable_qk_norm_rope_fusion is True
@@ -211,7 +220,8 @@ def test_explicitly_disabled_qk_fusion_and_missing_fp8_option(monkeypatch):
         "jina_vllm.reranker_v35.config.current_platform.is_cuda_alike", lambda: True
     )
     compilation = CompilationConfig(
-        pass_config={"enable_qk_norm_rope_fusion": False, "fuse_act_quant": True}
+        mode=CompilationMode.NONE,
+        pass_config={"enable_qk_norm_rope_fusion": False, "fuse_act_quant": True},
     )
     config = SimpleNamespace(additional_config={}, compilation_config=compilation)
     RerankerV35Config.verify_and_update_config(config)
