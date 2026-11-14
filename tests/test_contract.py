@@ -5,9 +5,11 @@ import pytest
 from transformers import AutoConfig
 from vllm.config import CompilationMode
 from vllm.config.compilation import CompilationConfig
-from vllm.config.vllm import OptimizationLevel
 
-from jina_vllm.reranker_v35.config import RerankerV35Config, reranker_block_size
+from jina_vllm.reranker_v35.config import (
+    configure_large_batch_swiglu,
+    reranker_block_size,
+)
 from jina_vllm.reranker_v35.contract import validate_model_contract
 
 
@@ -29,14 +31,11 @@ def cuda_compile_config(monkeypatch):
         "jina_vllm.reranker_v35.config.current_platform.is_cuda", lambda: True
     )
     return SimpleNamespace(
-        additional_config={},
-        model_config=SimpleNamespace(enforce_eager=False),
         scheduler_config=SimpleNamespace(max_num_batched_tokens=349_526),
         compilation_config=CompilationConfig(
+            mode=CompilationMode.VLLM_COMPILE,
             backend="inductor",
-            pass_config={"enable_qk_norm_rope_fusion": False},
         ),
-        optimization_level=OptimizationLevel.O2,
     )
 
 
@@ -45,7 +44,7 @@ def cuda_compile_config(monkeypatch):
     [
         (349_525, ["none", "-silu_and_mul"], ["none", "-silu_and_mul"]),
         (349_526, ["none"], ["none", "+silu_and_mul"]),
-        (524_288, [], ["+silu_and_mul"]),
+        (524_288, ["none"], ["none", "+silu_and_mul"]),
         (524_288, ["all"], ["all"]),
         (524_288, ["none", "+silu_and_mul"], ["none", "+silu_and_mul"]),
     ],
@@ -56,35 +55,29 @@ def test_swiglu_selection_by_batch_budget(
     cuda_compile_config.scheduler_config.max_num_batched_tokens = batch_tokens
     compilation = cuda_compile_config.compilation_config
     compilation.custom_ops = custom_ops.copy()
-    RerankerV35Config.verify_and_update_config(cuda_compile_config)
+    configure_large_batch_swiglu(cuda_compile_config)
     assert compilation.custom_ops == expected
 
 
 def test_large_inductor_batch_requires_native_swiglu(cuda_compile_config):
     cuda_compile_config.compilation_config.custom_ops = ["all", "-silu_and_mul"]
     with pytest.raises(ValueError, match=r"349,525.*silu_and_mul"):
-        RerankerV35Config.verify_and_update_config(cuda_compile_config)
+        configure_large_batch_swiglu(cuda_compile_config)
 
 
 @pytest.mark.parametrize(
-    ("mode", "backend", "enforce_eager", "optimization_level"),
+    ("mode", "backend"),
     [
-        (CompilationMode.NONE, "inductor", False, OptimizationLevel.O2),
-        (CompilationMode.VLLM_COMPILE, "eager", False, OptimizationLevel.O2),
-        (None, "inductor", True, OptimizationLevel.O2),
-        (None, "inductor", False, OptimizationLevel.O0),
+        (CompilationMode.NONE, "inductor"),
+        (CompilationMode.VLLM_COMPILE, "eager"),
     ],
 )
-def test_swiglu_opt_out_without_inductor(
-    cuda_compile_config, mode, backend, enforce_eager, optimization_level
-):
-    cuda_compile_config.model_config.enforce_eager = enforce_eager
-    cuda_compile_config.optimization_level = optimization_level
+def test_swiglu_opt_out_without_inductor(cuda_compile_config, mode, backend):
     compilation = cuda_compile_config.compilation_config
     compilation.mode = mode
     compilation.backend = backend
     compilation.custom_ops = ["-silu_and_mul"]
-    RerankerV35Config.verify_and_update_config(cuda_compile_config)
+    configure_large_batch_swiglu(cuda_compile_config)
     assert compilation.custom_ops == ["-silu_and_mul"]
 
 

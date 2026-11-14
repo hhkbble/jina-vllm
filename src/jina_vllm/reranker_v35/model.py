@@ -23,6 +23,7 @@ from jina_vllm.prefill import (
 )
 from jina_vllm.rope import verify_rotary_cache
 
+from .config import configure_large_batch_swiglu
 from .contract import validate_model_contract
 
 logger = init_logger("vllm.jina_vllm.reranker_v35.model")
@@ -74,6 +75,8 @@ class JinaRerankerV35(JinaForRanking):
                 raise ValueError(
                     f"{self.fp8_prefill_mode} requires pool-free prefill: {reason}"
                 )
+        # Read the effective compilation mode before constructing the MLPs.
+        configure_large_batch_swiglu(vllm_config)
         self.model = RerankerV35Backbone(
             vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model")
         )
