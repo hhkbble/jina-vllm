@@ -38,6 +38,28 @@ Use the model and tokenizer from the same local snapshot. The model-specific
 revisions are listed below. `model-reference.json` records the reranker
 snapshot hashes.
 
+### CUDA allocator
+
+`source scripts/env.sh` defaults to the PyTorch native CUDA allocator with
+expandable segments. Native `vllm serve` and offline Python commands launched
+from that shell inherit the setting, including their GPU workers. Both
+`PYTORCH_CUDA_ALLOC_CONF` and `PYTORCH_ALLOC_CONF` can supply the complete
+configuration. When both are set, the pinned Torch build uses
+`PYTORCH_CUDA_ALLOC_CONF`. The shell script preserves either variable, including
+an explicitly empty value.
+
+For a wheel deployment or any launch that skips `scripts/env.sh`, set the
+following in the launch environment before starting `vllm serve` or Python.
+
+```bash
+export PYTORCH_ALLOC_CONF=backend:native,expandable_segments:True
+```
+
+To turn expandable segments off, use
+`PYTORCH_ALLOC_CONF=backend:native,expandable_segments:False` as the launch
+setting, or set `expandable_segments:False` in your existing
+`PYTORCH_CUDA_ALLOC_CONF`. Start a fresh process to apply the change.
+
 ## Serve Jina Embeddings v5 Text Small
 
 Use the parent checkpoint `jinaai/jina-embeddings-v5-text-small` at revision

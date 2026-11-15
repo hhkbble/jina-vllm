@@ -15,6 +15,11 @@ export CUDA_CACHE_PATH="$JINA_VLLM_PROJECT_ROOT/.local/cache/cuda"
 export FLASHINFER_WORKSPACE_BASE="$JINA_VLLM_PROJECT_ROOT/.local"
 export HF_MODULES_CACHE="$JINA_VLLM_PROJECT_ROOT/.local/cache/hf-modules"
 
+# Preserve caller settings under either name recognized by the CUDA allocator.
+if [[ ! -v PYTORCH_CUDA_ALLOC_CONF && ! -v PYTORCH_ALLOC_CONF ]]; then
+    export PYTORCH_ALLOC_CONF=backend:native,expandable_segments:True
+fi
+
 mkdir -p -- "$TMPDIR" "$JINA_VLLM_OUTPUT_DIR" "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" \
     "$TORCH_HOME" "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR" \
     "$VLLM_CACHE_ROOT" "$CUDA_CACHE_PATH"

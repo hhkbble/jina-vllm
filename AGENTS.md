@@ -28,9 +28,10 @@ keep its dependencies, environment, and implementation self-contained.
 
 Source `scripts/env.sh` before setup, development, or validation commands. Use uv,
 the pinned Python, and the project `.venv`; restore dependencies with
-`uv sync --locked`. Keep temporary files and transient outputs under `.local/`;
-use `.local/tmp/` instead of the system temporary directory. Store documents and
-reports in `docs/`.
+`uv sync --locked`. For allocator comparisons, set each arm explicitly using the
+[CUDA allocator settings](README.md#cuda-allocator). Keep temporary files and
+transient outputs under `.local/`; use `.local/tmp/` instead of the system
+temporary directory. Store documents and reports in `docs/`.
 Both directories remain ignored. Reuse the user's downloaded Hugging Face model
 snapshot; preserve its files and revision, and avoid redundant downloads.
 
