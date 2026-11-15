@@ -5,7 +5,7 @@ from vllm.model_executor.models.jina import JinaEmbeddingsV5DecoderModel
 from vllm.v1.attention.backend import AttentionType
 from vllm.v1.worker.gpu.model_states.default import DefaultModelState
 
-from jina_vllm.config import fp8_prefill_mode
+from jina_vllm.config import configure_large_batch_swiglu, fp8_prefill_mode
 from jina_vllm.prefill import (
     PrefillModelState,
     fp8_prefill_reason,
@@ -54,6 +54,7 @@ class JinaEmbeddingsV5TextSmall(JinaEmbeddingsV5DecoderModel):
             reason = reason or fp8_prefill_reason(vllm_config)
             if reason is not None:
                 raise ValueError(f"{mode} requires pool-free prefill: {reason}")
+        configure_large_batch_swiglu(vllm_config)
         super().__init__(vllm_config=vllm_config, prefix=prefix)
         verify_rotary_cache(vllm_config.model_config, self.model.layers)
 

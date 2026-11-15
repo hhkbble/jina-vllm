@@ -85,6 +85,8 @@ curl http://127.0.0.1:8000/v1/embeddings \
 Offline, construct native `LLM` with the same model and pooling configuration,
 then use `llm.embed(inputs, pooling_params=PoolingParams(dimensions=32))`.
 The same input can show small BF16 numerical differences across GPU batch shapes.
+The `JinaEmbeddingsV5TextSmall` plugin architecture also applies the shared
+[large-batch SwiGLU protection](#large-batch-swiglu).
 
 ### Text Small W8A8 Linear
 
@@ -303,10 +305,15 @@ the checkpoint's RoPE. Each no-pool token budget must cover the service length.
 For both plugin models, FP8 prefill supports a scheduled budget of up to
 524,288 tokens per worker step.
 
-For the reranker on CUDA with Inductor, setting `--max-num-batched-tokens`
-above 349,525 automatically enables vLLM's native CUDA SwiGLU to handle the
-larger activation offsets. Remove any explicit `-silu_and_mul` custom-op
-override when using this budget.
+## Large-batch SwiGLU
+
+Both Jina plugin architectures use vLLM's native CUDA SwiGLU when Inductor is
+active and the worker's `--max-num-batched-tokens` exceeds the 32-bit indexing
+limit for the model's packed gate/up projection. The pinned checkpoints both
+cross this limit at 349,526 batched tokens. The budget counts the entire worker
+step, including batches of shorter inputs. Above the limit, compiled CUDA
+configurations reject an explicit `-silu_and_mul` override. With compilation
+disabled, vLLM continues to honor the existing custom-op settings.
 
 ## Requests
 

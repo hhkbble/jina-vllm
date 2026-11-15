@@ -6,10 +6,8 @@ from transformers import AutoConfig
 from vllm.config import CompilationMode
 from vllm.config.compilation import CompilationConfig
 
-from jina_vllm.reranker_v35.config import (
-    configure_large_batch_swiglu,
-    reranker_block_size,
-)
+from jina_vllm.config import configure_large_batch_swiglu
+from jina_vllm.reranker_v35.config import reranker_block_size
 from jina_vllm.reranker_v35.contract import validate_model_contract
 
 
@@ -27,10 +25,12 @@ def test_block_size_requires_positive_integer(value):
 
 @pytest.fixture
 def cuda_compile_config(monkeypatch):
-    monkeypatch.setattr(
-        "jina_vllm.reranker_v35.config.current_platform.is_cuda", lambda: True
-    )
+    monkeypatch.setattr("jina_vllm.config.current_platform.is_cuda", lambda: True)
     return SimpleNamespace(
+        model_config=SimpleNamespace(
+            architecture="JinaEmbeddingsV5TextSmall",
+            hf_config=SimpleNamespace(intermediate_size=3072),
+        ),
         scheduler_config=SimpleNamespace(max_num_batched_tokens=349_526),
         compilation_config=CompilationConfig(
             mode=CompilationMode.VLLM_COMPILE,
@@ -40,18 +40,20 @@ def cuda_compile_config(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("batch_tokens", "custom_ops", "expected"),
+    ("intermediate_size", "batch_tokens", "custom_ops", "expected"),
     [
-        (349_525, ["none", "-silu_and_mul"], ["none", "-silu_and_mul"]),
-        (349_526, ["none"], ["none", "+silu_and_mul"]),
-        (524_288, ["none"], ["none", "+silu_and_mul"]),
-        (524_288, ["all"], ["all"]),
-        (524_288, ["none", "+silu_and_mul"], ["none", "+silu_and_mul"]),
+        (3072, 349_525, ["none", "-silu_and_mul"], ["none", "-silu_and_mul"]),
+        (3072, 349_526, ["none"], ["none", "+silu_and_mul"]),
+        (3072, 524_288, ["all"], ["all"]),
+        (3072, 524_288, ["none", "+silu_and_mul"], ["none", "+silu_and_mul"]),
+        (4096, 262_144, ["none"], ["none"]),
+        (4096, 262_145, ["none"], ["none", "+silu_and_mul"]),
     ],
 )
 def test_swiglu_selection_by_batch_budget(
-    cuda_compile_config, batch_tokens, custom_ops, expected
+    cuda_compile_config, intermediate_size, batch_tokens, custom_ops, expected
 ):
+    cuda_compile_config.model_config.hf_config.intermediate_size = intermediate_size
     cuda_compile_config.scheduler_config.max_num_batched_tokens = batch_tokens
     compilation = cuda_compile_config.compilation_config
     compilation.custom_ops = custom_ops.copy()

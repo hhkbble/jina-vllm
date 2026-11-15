@@ -2,13 +2,17 @@ from functools import cache, wraps
 from typing import Literal, cast
 
 import torch
-from vllm.config import VllmConfig
+from vllm.config import CompilationMode, VllmConfig
 from vllm.config.cache import register_kv_cache_dtype
+from vllm.logger import init_logger
+from vllm.platforms import current_platform
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 from vllm.v1.kv_cache_interface import KVQuantMode
 
 from .embeddings_v5_text_small import ARCH as EMBEDDINGS_V5_TEXT_SMALL_ARCH
 from .reranker_v35.contract import ARCH as RERANKER_V35_ARCH
+
+logger = init_logger("vllm.jina_vllm.config")
 
 FP8PrefillMode = Literal["fp8_per_token_head_p_row", "fp8_per_token_head_p_tile"]
 FP8_P_ROW = "fp8_per_token_head_p_row"
@@ -18,6 +22,41 @@ FP8_PREFILL_BACKEND = "JINA_FP8_PREFILL"
 FP8_PREFILL_ARCHITECTURES = frozenset(
     {RERANKER_V35_ARCH, EMBEDDINGS_V5_TEXT_SMALL_ARCH}
 )
+
+
+def configure_large_batch_swiglu(vllm_config: VllmConfig) -> None:
+    """Choose SwiGLU before building the MLPs, with the resolved worker config."""
+    compilation = vllm_config.compilation_config
+    if (
+        compilation.mode == CompilationMode.NONE
+        or compilation.backend != "inductor"
+        or not current_platform.is_cuda()
+    ):
+        return
+
+    model = vllm_config.model_config
+    # The packed gate/up tensor has two intermediate-width halves per token.
+    max_int32_rows = (1 << 31) // (2 * model.hf_config.intermediate_size)
+    batch_tokens = vllm_config.scheduler_config.max_num_batched_tokens
+    if batch_tokens <= max_int32_rows:
+        return
+
+    # Inductor can fuse SwiGLU with FP8 quantization using int32 offsets.
+    # The native CUDA op uses int64 offsets, including during warmup.
+    ops = compilation.custom_ops
+    if "-silu_and_mul" in ops:
+        raise ValueError(
+            f"{model.architecture} CUDA Inductor batches above {max_int32_rows:,}"
+            " tokens require the native silu_and_mul op. Remove "
+            "'-silu_and_mul' from compilation_config.custom_ops."
+        )
+    if "all" not in ops and "+silu_and_mul" not in ops:
+        ops.append("+silu_and_mul")
+        logger.info(
+            "Enabled native CUDA SwiGLU for %s with a %d-token batch budget",
+            model.architecture,
+            batch_tokens,
+        )
 
 
 def restore_fp8_backend() -> AttentionBackendEnum:

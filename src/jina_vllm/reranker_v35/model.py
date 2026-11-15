@@ -14,7 +14,7 @@ from vllm.model_executor.models.qwen3 import Qwen3DecoderLayer, Qwen3Model
 from vllm.model_executor.models.utils import extract_layer_index, maybe_prefix
 from vllm.v1.worker.gpu.model_states.default import DefaultModelState
 
-from jina_vllm.config import fp8_prefill_mode
+from jina_vllm.config import configure_large_batch_swiglu, fp8_prefill_mode
 from jina_vllm.prefill import (
     PrefillModelState,
     fp8_prefill_reason,
@@ -23,7 +23,6 @@ from jina_vllm.prefill import (
 )
 from jina_vllm.rope import verify_rotary_cache
 
-from .config import configure_large_batch_swiglu
 from .contract import validate_model_contract
 
 logger = init_logger("vllm.jina_vllm.reranker_v35.model")
@@ -75,7 +74,6 @@ class JinaRerankerV35(JinaForRanking):
                 raise ValueError(
                     f"{self.fp8_prefill_mode} requires pool-free prefill: {reason}"
                 )
-        # Read the effective compilation mode before constructing the MLPs.
         configure_large_batch_swiglu(vllm_config)
         self.model = RerankerV35Backbone(
             vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model")
