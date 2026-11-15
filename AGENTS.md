@@ -74,6 +74,8 @@ For reranker block changes, compare HTTP completion counts and offline token
 IDs using the same `--additional-config` and the engine's effective length.
 For RoPE changes, run the README YaRN probes for both plugins and check the
 worker cache, fixed-token comparison, and input above each checkpoint limit.
+For idle trim changes, verify native ingress ordering on both sides of the
+trim commitment and measure released bytes and first-request latency.
 Use a child logger under `vllm.jina_vllm` for native startup/cleanup receipts.
 Report executed environment, model, HTTP, kernel and performance checks
 separately.

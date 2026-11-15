@@ -16,6 +16,7 @@ def register() -> None:
 
     from .config import register_prefill_modes
     from .embeddings_v5_text_small.config import TextSmallConfig
+    from .idle_trim import install_idle_trim
     from .reranker_v35.config import RerankerV35Config
 
     ModelRegistry.register_model(
@@ -28,6 +29,7 @@ def register() -> None:
     MODELS_CONFIG_MAP[RERANKER_V35_ARCH] = RerankerV35Config
     MODELS_CONFIG_MAP[EMBEDDINGS_V5_TEXT_SMALL_ARCH] = TextSmallConfig
     register_prefill_modes()
+    install_idle_trim()
 
 
 class JinaEndpointPlugin:

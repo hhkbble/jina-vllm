@@ -55,6 +55,7 @@ def test_text_small_qk_fusion_default(
     monkeypatch.setattr("jina_vllm.config.current_platform.is_xpu", lambda: False)
     compilation = CompilationConfig(**compile_options)
     config = SimpleNamespace(
+        additional_config={},
         model_config=SimpleNamespace(enforce_eager=eager),
         compilation_config=compilation,
     )

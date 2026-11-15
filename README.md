@@ -60,6 +60,27 @@ To turn expandable segments off, use
 setting, or set `expandable_segments:False` in your existing
 `PYTORCH_CUDA_ALLOC_CONF`. Start a fresh process to apply the change.
 
+### Idle GPU cache trim
+
+The pool-free FA2 and FP8 serve commands below pass `idle_trim: 0.1` explicitly.
+The plugin defaults to off. To turn it off, omit the field or pass
+
+```bash
+--additional-config '{"jina_vllm":{"idle_trim":0}}'
+```
+
+Use a number in `[0, 1)`. When the engine drains and its worker finishes GPU
+work, the plugin tries to release unused PyTorch cache if reserved minus
+allocated memory exceeds this fraction of the worker GPU's total memory.
+Use pool-free CUDA Model Runner V2 with exactly one visible CUDA device,
+the native PyTorch allocator, and the default worker, multiprocessing, and
+synchronous scheduling.
+Startup reports the effective byte threshold. Each trim reports the bytes released.
+
+Requests already queued in EngineCore take priority. Requests queued after the
+trim commits wait for it to finish, and the next request may need to rebuild
+the cache. Put other plugin options in the same JSON object.
+
 ## Serve Jina Embeddings v5 Text Small
 
 Use the parent checkpoint `jinaai/jina-embeddings-v5-text-small` at revision
@@ -137,7 +158,8 @@ embedding_pool_free=(
   --long-prefill-token-threshold 0
 )
 vllm serve "${embedding[@]}" --hf-overrides "$embedding_pool_free_hf" \
-  "${embedding_fa2[@]}" "${embedding_pool_free[@]}"
+  "${embedding_fa2[@]}" "${embedding_pool_free[@]}" \
+  --additional-config '{"jina_vllm":{"idle_trim":0.1}}'
 ```
 
 The 131,072-token batch and scheduler budgets cover four 32,768-token
@@ -145,6 +167,7 @@ inputs in one worker step. The scheduler budget inherits the batch budget.
 Keep prefix caching disabled and let vLLM derive the KV allocation. Check
 the startup logs for pool-free FA2 selection and zero physical KV allocation
 across all 28 layers. Ineligible FA2 configurations use paged KV and log the reason.
+Set `idle_trim` to `0` when using a paged KV configuration.
 
 ### Text Small pool-free FP8 prefill
 
@@ -153,7 +176,8 @@ Use the same pool-free settings with the explicit FP8 backend.
 ```bash
 vllm serve "${embedding[@]}" --hf-overrides "$embedding_pool_free_hf" \
   "${embedding_pool_free[@]}" --attention-backend JINA_FP8_PREFILL \
-  --kv-cache-dtype fp8_per_token_head_p_row
+  --kv-cache-dtype fp8_per_token_head_p_row \
+  --additional-config '{"jina_vllm":{"idle_trim":0.1}}'
 ```
 
 Use `fp8_per_token_head_p_tile` to select tile scaling. The backend uses FP8
@@ -236,7 +260,8 @@ pool_free=(
   --no-enable-chunked-prefill --max-num-batched-tokens 131072
   --max-num-scheduled-tokens 131072 --long-prefill-token-threshold 0
 )
-vllm serve "${reranker[@]}" "${fa2[@]}" "${pool_free[@]}"
+vllm serve "${reranker[@]}" "${fa2[@]}" "${pool_free[@]}" \
+  --additional-config '{"jina_vllm":{"idle_trim":0.1}}'
 ```
 
 Jina v3.5 pooling on CUDA Model Runner V2 selects pool-free prefill automatically
@@ -249,8 +274,8 @@ any long-prefill threshold must allow the entire prompt in one step.
 The startup log reports the selected mode and, in pool-free mode, confirms
 zero KV cache tensors across all 28 layers. Chunked prefill,
 automatic attention backend selection, quantized KV, and configurations that
-require a KV pool retain native paged KV and log the reason. Native parameter
-validation still applies.
+require a KV pool retain native paged KV and log the reason. Set `idle_trim` to
+`0` for these configurations. Native parameter validation still applies.
 
 Pool-free prefill uses the same rerank API, sliding windows and listwise
 processing. Append `"${w8a8[@]}"` to use FP8 Linear with BF16 attention.
@@ -272,7 +297,8 @@ with `--mode bf16` or `--mode fp8`.
 export VLLM_USE_V2_MODEL_RUNNER=1
 vllm serve "${reranker[@]}" "${pool_free[@]}" \
   --attention-backend JINA_FP8_PREFILL \
-  --kv-cache-dtype fp8_per_token_head_p_row
+  --kv-cache-dtype fp8_per_token_head_p_row \
+  --additional-config '{"jina_vllm":{"idle_trim":0.1}}'
 ```
 
 Select either `fp8_per_token_head_p_row` or `fp8_per_token_head_p_tile`.
@@ -384,7 +410,9 @@ submission and reports its index and token count. Raw query vectors are fused
 across blocks in the same group.
 
 Set a positive `block_size` at startup to change the document limit. For example,
-append the following option to the reranker serving command:
+set the following option in the reranker serving command. For a pool-free
+instance with idle trim enabled, keep `"idle_trim":0.1` in the same `jina_vllm`
+object.
 
 ```bash
 --additional-config '{"jina_vllm":{"reranker_v35":{"block_size":300}}}'
