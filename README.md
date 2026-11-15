@@ -86,6 +86,7 @@ Offline, construct native `LLM` with the same model and pooling configuration,
 then use `llm.embed(inputs, pooling_params=PoolingParams(dimensions=32))`.
 The same input can show small BF16 numerical differences across GPU batch shapes.
 The `JinaEmbeddingsV5TextSmall` plugin architecture also applies the shared
+[QK Norm + RoPE fusion default](#qk-norm--rope-fusion) and
 [large-batch SwiGLU protection](#large-batch-swiglu).
 
 ### Text Small W8A8 Linear
@@ -274,11 +275,7 @@ The tile mode shares a scale across each KV head's tile. Causal and window
 masks still zero excluded weights. In tile mode, a masked column in the same
 tile can affect the rounding of the included columns through the shared scale.
 
-On the compiled Jina path, QK Norm+RoPE fusion defaults to enabled, with
-activation-quant and norm-quant fusion disabled. Native
-`--compilation-config '{"pass_config":{"enable_qk_norm_rope_fusion":false}}'`
-overrides the QK default. The same keys can be passed in the offline
-`compilation_config`. FP8 attention runs between piecewise graph segments.
+FP8 attention runs between piecewise graph segments.
 
 On RTX 5090, four offline latency cases showed a 1.12–1.18× geometric
 mean speedup against same-Linear pool-free FA2. RTX 5090 (SM120) is the
@@ -304,6 +301,19 @@ and use the original length and token budgets. Omit `rope_parameters` to use
 the checkpoint's RoPE. Each no-pool token budget must cover the service length.
 For both plugin models, FP8 prefill supports a scheduled budget of up to
 524,288 tokens per worker step.
+
+## QK Norm + RoPE fusion
+
+The `JinaEmbeddingsV5TextSmall` and `JinaRerankerV35` plugin architectures
+default to QK Norm + RoPE fusion with vLLM compilation on CUDA, ROCm and XPU.
+This default enables the native rotary embedding custom op. Eager mode or
+`-rotary_embedding` in `custom_ops` prevents automatic enablement. To turn
+the fusion off, pass
+`--compilation-config '{"pass_config":{"enable_qk_norm_rope_fusion":false}}'`
+or set the same pass option in the offline `compilation_config`.
+
+The reranker defaults activation-quant and norm-quant fusion to off.
+Text Small retains vLLM's defaults for those two passes.
 
 ## Large-batch SwiGLU
 

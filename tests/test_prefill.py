@@ -120,9 +120,7 @@ def test_explicit_fp8_config_and_fusion_defaults(monkeypatch, mode):
     assert handler.quant_mode() == KVQuantMode.NONE
     assert handler.torch_dtype() == torch.bfloat16
     assert fp8_prefill_mode(cache.cache_dtype) == mode
-    monkeypatch.setattr(
-        "jina_vllm.reranker_v35.config.current_platform.is_cuda_alike", lambda: True
-    )
+    monkeypatch.setattr("jina_vllm.config.current_platform.is_cuda_alike", lambda: True)
     compilation = CompilationConfig(pass_config={"fuse_norm_quant": True})
     config = SimpleNamespace(
         additional_config={},
@@ -207,9 +205,7 @@ def test_fp8_impl_rejects_incompatible_attention(
 
 
 def test_explicitly_disabled_qk_fusion_and_missing_fp8_option(monkeypatch):
-    monkeypatch.setattr(
-        "jina_vllm.reranker_v35.config.current_platform.is_cuda_alike", lambda: True
-    )
+    monkeypatch.setattr("jina_vllm.config.current_platform.is_cuda_alike", lambda: True)
     compilation = CompilationConfig(
         pass_config={"enable_qk_norm_rope_fusion": False, "fuse_act_quant": True}
     )

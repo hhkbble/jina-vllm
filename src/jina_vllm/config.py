@@ -24,6 +24,25 @@ FP8_PREFILL_ARCHITECTURES = frozenset(
 )
 
 
+def default_qk_norm_rope_fusion(vllm_config: VllmConfig) -> None:
+    compilation = vllm_config.compilation_config
+    passes = compilation.pass_config
+    if passes.enable_qk_norm_rope_fusion is not None:
+        return
+
+    ops = compilation.custom_ops
+    passes.enable_qk_norm_rope_fusion = (
+        (current_platform.is_cuda_alike() or current_platform.is_xpu())
+        and "-rotary_embedding" not in ops
+        and not vllm_config.model_config.enforce_eager
+        and compilation.mode in (None, CompilationMode.VLLM_COMPILE)
+    )
+    # The pinned CompilationConfig adds this op for explicit opt-in, before
+    # the model config hook runs. Apply the same selection for our default.
+    if passes.enable_qk_norm_rope_fusion and "+rotary_embedding" not in ops:
+        ops.append("+rotary_embedding")
+
+
 def configure_large_batch_swiglu(vllm_config: VllmConfig) -> None:
     """Choose SwiGLU before building the MLPs, with the resolved worker config."""
     compilation = vllm_config.compilation_config

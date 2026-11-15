@@ -1,8 +1,70 @@
 from types import SimpleNamespace
 
 import pytest
+from vllm.config import CompilationConfig, CompilationMode
 
+from jina_vllm.embeddings_v5_text_small.config import TextSmallConfig
 from jina_vllm.embeddings_v5_text_small.model import validate_model_contract
+
+
+@pytest.mark.parametrize(
+    ("compile_options", "eager", "cuda_alike", "expected"),
+    [
+        pytest.param({}, False, True, True, id="default"),
+        pytest.param(
+            {"mode": CompilationMode.VLLM_COMPILE, "custom_ops": ["+rotary_embedding"]},
+            False,
+            True,
+            True,
+            id="existing-custom-op",
+        ),
+        pytest.param(
+            {"pass_config": {"enable_qk_norm_rope_fusion": False}},
+            False,
+            True,
+            False,
+            id="explicit-opt-out",
+        ),
+        pytest.param(
+            {"pass_config": {"enable_qk_norm_rope_fusion": True}},
+            False,
+            True,
+            True,
+            id="native-opt-in",
+        ),
+        pytest.param(
+            {"custom_ops": ["-rotary_embedding"]},
+            False,
+            True,
+            False,
+            id="custom-op-opt-out",
+        ),
+        pytest.param({}, True, True, False, id="eager"),
+        pytest.param(
+            {"mode": CompilationMode.NONE}, False, True, False, id="no-compilation"
+        ),
+        pytest.param({}, False, False, False, id="unsupported-platform"),
+    ],
+)
+def test_text_small_qk_fusion_default(
+    monkeypatch, compile_options, eager, cuda_alike, expected
+):
+    monkeypatch.setattr(
+        "jina_vllm.config.current_platform.is_cuda_alike", lambda: cuda_alike
+    )
+    monkeypatch.setattr("jina_vllm.config.current_platform.is_xpu", lambda: False)
+    compilation = CompilationConfig(**compile_options)
+    config = SimpleNamespace(
+        model_config=SimpleNamespace(enforce_eager=eager),
+        compilation_config=compilation,
+    )
+    TextSmallConfig.verify_and_update_config(config)
+    assert compilation.pass_config.enable_qk_norm_rope_fusion is expected
+    assert compilation.custom_ops.count("+rotary_embedding") == int(expected)
+    if "-rotary_embedding" in compile_options.get("custom_ops", []):
+        assert "-rotary_embedding" in compilation.custom_ops
+    assert compilation.pass_config.fuse_act_quant is None
+    assert compilation.pass_config.fuse_norm_quant is None
 
 
 @pytest.fixture

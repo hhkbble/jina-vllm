@@ -15,6 +15,7 @@ def register() -> None:
     from vllm.model_executor.models.config import MODELS_CONFIG_MAP
 
     from .config import register_prefill_modes
+    from .embeddings_v5_text_small.config import TextSmallConfig
     from .reranker_v35.config import RerankerV35Config
 
     ModelRegistry.register_model(
@@ -25,6 +26,7 @@ def register() -> None:
         "jina_vllm.embeddings_v5_text_small.model:JinaEmbeddingsV5TextSmall",
     )
     MODELS_CONFIG_MAP[RERANKER_V35_ARCH] = RerankerV35Config
+    MODELS_CONFIG_MAP[EMBEDDINGS_V5_TEXT_SMALL_ARCH] = TextSmallConfig
     register_prefill_modes()
 
 

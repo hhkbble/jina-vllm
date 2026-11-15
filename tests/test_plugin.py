@@ -37,12 +37,16 @@ def test_architecture_requires_explicit_allowlist(allowed, registered):
     code = (
         "from vllm.plugins import load_general_plugins; load_general_plugins(); "
         "from vllm.model_executor.models import ModelRegistry; "
-        "from vllm.model_executor.models.config import MODELS_CONFIG_MAP; "
+        "from vllm.model_executor.models.config import "
+        "JinaEmbeddingsV5ModelConfig, MODELS_CONFIG_MAP; "
         f"assert ({ARCH!r} in ModelRegistry.get_supported_archs()) == {registered!r}; "
         f"assert ({EMBEDDINGS_ARCH!r} in ModelRegistry.get_supported_archs()) "
         f"== {registered!r}; "
         "assert 'JinaEmbeddingsV5Model' in ModelRegistry.get_supported_archs(); "
-        f"assert ({ARCH!r} in MODELS_CONFIG_MAP) == {registered!r}"
+        f"assert ({ARCH!r} in MODELS_CONFIG_MAP) == {registered!r}; "
+        f"assert ({EMBEDDINGS_ARCH!r} in MODELS_CONFIG_MAP) == {registered!r}; "
+        "assert MODELS_CONFIG_MAP['JinaEmbeddingsV5Model'] "
+        "is JinaEmbeddingsV5ModelConfig"
     )
     env = dict(os.environ)
     env.pop("VLLM_PLUGINS", None)
