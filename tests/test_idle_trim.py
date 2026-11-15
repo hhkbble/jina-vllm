@@ -44,6 +44,27 @@ def test_disabled_skips_topology_checks_but_enabled_rejects_dense_dp(monkeypatch
         idle_trim.validate_idle_trim_config(config)
 
 
+def test_idle_trim_rejects_cumem_without_sleep(monkeypatch):
+    monkeypatch.setattr(idle_trim.current_platform, "is_cuda", lambda: True)
+    monkeypatch.setenv("VLLM_ENABLE_V1_MULTIPROCESSING", "1")
+    config = SimpleNamespace(
+        additional_config={"jina_vllm": {"idle_trim": 0.1}},
+        model_config=SimpleNamespace(
+            runner_type="pooling", enable_sleep_mode=False, enable_cumem_allocator=True
+        ),
+        parallel_config=SimpleNamespace(
+            tensor_parallel_size=1,
+            pipeline_parallel_size=1,
+            data_parallel_size=1,
+            prefill_context_parallel_size=1,
+            decode_context_parallel_size=1,
+        ),
+        offload_config=None,
+    )
+    with pytest.raises(ValueError, match="CuMem"):
+        idle_trim.validate_idle_trim_config(config)
+
+
 @pytest.fixture
 def candidate(monkeypatch):
     core = SimpleNamespace(

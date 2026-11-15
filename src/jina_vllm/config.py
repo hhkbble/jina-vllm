@@ -19,28 +19,35 @@ FP8_P_ROW = "fp8_per_token_head_p_row"
 FP8_P_TILE = "fp8_per_token_head_p_tile"
 FP8_PREFILL_MODES = (FP8_P_ROW, FP8_P_TILE)
 FP8_PREFILL_BACKEND = "JINA_FP8_PREFILL"
-FP8_PREFILL_ARCHITECTURES = frozenset(
-    {RERANKER_V35_ARCH, EMBEDDINGS_V5_TEXT_SMALL_ARCH}
-)
+JINA_ARCHITECTURES = frozenset({RERANKER_V35_ARCH, EMBEDDINGS_V5_TEXT_SMALL_ARCH})
 
 
-def default_qk_norm_rope_fusion(vllm_config: VllmConfig) -> None:
-    compilation = vllm_config.compilation_config
-    passes = compilation.pass_config
-    if passes.enable_qk_norm_rope_fusion is not None:
-        return
+@cache
+def register_compilation_defaults() -> None:
+    apply_defaults = VllmConfig._apply_optimization_level_defaults
 
-    ops = compilation.custom_ops
-    passes.enable_qk_norm_rope_fusion = (
-        (current_platform.is_cuda_alike() or current_platform.is_xpu())
-        and "-rotary_embedding" not in ops
-        and not vllm_config.model_config.enforce_eager
-        and compilation.mode in (None, CompilationMode.VLLM_COMPILE)
-    )
-    # The pinned CompilationConfig adds this op for explicit opt-in, before
-    # the model config hook runs. Apply the same selection for our default.
-    if passes.enable_qk_norm_rope_fusion and "+rotary_embedding" not in ops:
-        ops.append("+rotary_embedding")
+    @wraps(apply_defaults)
+    def apply_jina_defaults(config, defaults) -> None:
+        # vLLM has resolved the compiler here and is about to fill unset passes.
+        model = config.model_config
+        compilation = config.compilation_config
+        passes = compilation.pass_config
+        ops = compilation.custom_ops
+        if (
+            model is not None
+            and model.architecture in JINA_ARCHITECTURES
+            and passes.enable_qk_norm_rope_fusion is None
+            and compilation.mode == CompilationMode.VLLM_COMPILE
+            and compilation.backend == "inductor"
+            and (current_platform.is_cuda_alike() or current_platform.is_xpu())
+            and "-rotary_embedding" not in ops
+        ):
+            passes.enable_qk_norm_rope_fusion = True
+            if "+rotary_embedding" not in ops:
+                ops.append("+rotary_embedding")
+        apply_defaults(config, defaults)
+
+    VllmConfig._apply_optimization_level_defaults = apply_jina_defaults
 
 
 def configure_large_batch_swiglu(vllm_config: VllmConfig) -> None:
@@ -143,9 +150,9 @@ def validate_prefill_selection(config: VllmConfig) -> None:
         raise ValueError(f"{FP8_PREFILL_BACKEND} requires kv-cache-dtype {choices}")
     if (
         config.model_config is None
-        or config.model_config.architecture not in FP8_PREFILL_ARCHITECTURES
+        or config.model_config.architecture not in JINA_ARCHITECTURES
     ):
-        architectures = ", ".join(sorted(FP8_PREFILL_ARCHITECTURES))
+        architectures = ", ".join(sorted(JINA_ARCHITECTURES))
         raise ValueError(f"kv-cache-dtype={mode} requires {architectures}")
     if attention.backend_per_kind:
         raise ValueError(f"{FP8_PREFILL_BACKEND} requires one backend for all layers")

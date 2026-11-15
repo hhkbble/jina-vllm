@@ -119,12 +119,15 @@ def fp8_prefill_reason(config: VllmConfig) -> str | None:
     from .fp8_prefill import FP8_DEVICE_CAPABILITIES, FP8_MAX_SCHEDULED_TOKENS
 
     scheduler = config.scheduler_config
-    budget = scheduler.max_num_scheduled_tokens or scheduler.max_num_batched_tokens
-    if budget > FP8_MAX_SCHEDULED_TOKENS:
-        return (
-            f"scheduled token budget {budget} exceeds the FP8 packed address "
-            f"limit of {FP8_MAX_SCHEDULED_TOKENS}"
-        )
+    for kind, budget in (
+        ("scheduled", scheduler.max_num_scheduled_tokens),
+        ("batched", scheduler.max_num_batched_tokens),
+    ):
+        if budget is not None and budget > FP8_MAX_SCHEDULED_TOKENS:
+            return (
+                f"{kind} token budget {budget} exceeds the FP8 packed address "
+                f"limit of {FP8_MAX_SCHEDULED_TOKENS}"
+            )
 
     capability = current_platform.get_device_capability(torch.cuda.current_device())
     if capability not in FP8_DEVICE_CAPABILITIES:

@@ -57,7 +57,7 @@ class FakeEngine:
             self.prompts.append(prompt)
             self.active.set()
             try:
-                if self.hold:
+                if self.hold or (self.missing and request_id.endswith("-1")):
                     await asyncio.Event().wait()
                 await asyncio.sleep(0.01 if request_id.endswith("-1") else 0.03)
                 if self.fail and request_id.endswith("-0"):
@@ -203,6 +203,7 @@ async def test_score_groups_and_engine_ids(serving, fields, queries, docs, block
         dict(max_tokens_per_query=512),
         dict(max_tokens_per_doc=100),
         dict(instruction="different"),
+        dict(chat_template="different"),
         dict(chat_template_kwargs={"enable_thinking": True}),
         dict(truncate_prompt_tokens=-1),
         dict(padding="max_length"),
@@ -268,9 +269,11 @@ async def test_failure_aborts_whole_request_and_preserves_error(
     setattr(engine, mode, True)
     engine.fail_abort = cleanup_error
     with pytest.raises(
-        (RuntimeError, ValueError), match="block failed|all prompts|prepare failed"
+        RuntimeError, match="block failed|without a finished output|prepare failed"
     ):
-        await handler(RerankRequest(query="q", documents=["doc"] * 126))
+        await asyncio.wait_for(
+            handler(RerankRequest(query="q", documents=["doc"] * 126)), timeout=5
+        )
     assert len(engine.aborted) == 2
     assert set(engine.closed) == set(engine.started)
 

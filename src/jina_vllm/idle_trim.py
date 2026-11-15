@@ -1,4 +1,3 @@
-import os
 from functools import cache, wraps
 from time import monotonic
 from typing import TYPE_CHECKING
@@ -56,6 +55,7 @@ def validate_idle_trim_config(config: "VllmConfig") -> None:
     offload = config.offload_config
     if (
         config.model_config.enable_sleep_mode
+        or config.model_config.enable_cumem_allocator
         or offload.uva.cpu_offload_gb
         or offload.prefetch.offload_group_size
         or config.kv_transfer_config is not None
@@ -63,7 +63,7 @@ def validate_idle_trim_config(config: "VllmConfig") -> None:
         or config.cache_config.kv_offloading_size is not None
     ):
         raise ValueError(
-            f"{OPTION} requires pooling without sleep, offload or transfers"
+            f"{OPTION} requires pooling without sleep, CuMem, offload or transfers"
         )
 
 
@@ -158,7 +158,7 @@ def _enable_idle_trim(core: "EngineCoreProc", ratio: float) -> None:
         raise ValueError(f"{OPTION} requires exactly one visible CUDA device")
     if (
         torch.cuda.get_allocator_backend() != "native"
-        or os.getenv("PYTORCH_NO_CUDA_MEMORY_CACHING") == "1"
+        or not torch._C._cuda_cudaCachingAllocator_is_enabled()
     ):
         raise ValueError(f"{OPTION} requires the PyTorch native CUDA caching allocator")
 

@@ -6,6 +6,7 @@ import torch
 from vllm.config import AttentionConfig, CacheConfig, SchedulerConfig, VllmConfig
 from vllm.config.cache import get_kv_cache_dtype_handler
 from vllm.config.compilation import CompilationConfig, CUDAGraphMode
+from vllm.model_executor.layers.attention import Attention
 from vllm.v1.attention.backends.flash_attn import (
     FlashAttentionBackend,
     FlashAttentionImpl,
@@ -113,14 +114,13 @@ def test_pool_free_checks_every_resolved_layer():
 @pytest.mark.parametrize(
     "mode", ["fp8_per_token_head_p_row", "fp8_per_token_head_p_tile"]
 )
-def test_explicit_fp8_config_and_fusion_defaults(monkeypatch, mode):
+def test_explicit_fp8_config_and_reranker_quant_fusion_defaults(mode):
     register_prefill_modes()
     cache = CacheConfig(cache_dtype=mode)
     handler = get_kv_cache_dtype_handler(mode)
     assert handler.quant_mode() == KVQuantMode.NONE
     assert handler.torch_dtype() == torch.bfloat16
     assert fp8_prefill_mode(cache.cache_dtype) == mode
-    monkeypatch.setattr("jina_vllm.config.current_platform.is_cuda_alike", lambda: True)
     compilation = CompilationConfig(pass_config={"fuse_norm_quant": True})
     config = SimpleNamespace(
         additional_config={},
@@ -128,10 +128,8 @@ def test_explicit_fp8_config_and_fusion_defaults(monkeypatch, mode):
         compilation_config=compilation,
     )
     RerankerV35Config.verify_and_update_config(config)
-    assert compilation.pass_config.enable_qk_norm_rope_fusion is True
     assert compilation.pass_config.fuse_act_quant is False
     assert compilation.pass_config.fuse_norm_quant is True
-    assert "+rotary_embedding" in compilation.custom_ops
 
 
 @pytest.mark.parametrize(
@@ -204,6 +202,22 @@ def test_fp8_impl_rejects_incompatible_attention(
         )
 
 
+def test_native_attention_repr_reports_fp8_impl_geometry(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda: (12, 0))
+    impl = JinaFP8PrefillImpl(
+        num_heads=16,
+        num_kv_heads=8,
+        head_size=128,
+        scale=128**-0.5,
+        alibi_slopes=None,
+        sliding_window=None,
+        kv_cache_dtype="fp8_per_token_head_p_row",
+    )
+    assert Attention.extra_repr(SimpleNamespace(impl=impl)).startswith(
+        "head_size=128, num_heads=16, num_kv_heads=8"
+    )
+
+
 def test_explicitly_disabled_qk_fusion_and_missing_fp8_option(monkeypatch):
     monkeypatch.setattr("jina_vllm.config.current_platform.is_cuda_alike", lambda: True)
     compilation = CompilationConfig(
@@ -242,12 +256,19 @@ def test_fp8_prefill_checks_device_and_linear_backend(monkeypatch):
     assert fp8_prefill_reason(config) is None
 
 
-@pytest.mark.parametrize("scheduled", [None, 524289])
-def test_fp8_prefill_caps_effective_token_budget(prefill_config, scheduled):
+@pytest.mark.parametrize(
+    ("batched", "scheduled", "kind"),
+    [
+        (524289, None, "batched"),
+        (524289, 131072, "batched"),
+        (524288, 524289, "scheduled"),
+    ],
+)
+def test_fp8_prefill_caps_both_token_budgets(prefill_config, batched, scheduled, kind):
     scheduler = prefill_config.scheduler_config
-    scheduler.max_num_batched_tokens = 524289
+    scheduler.max_num_batched_tokens = batched
     scheduler.max_num_scheduled_tokens = scheduled
-    assert "524289 exceeds" in fp8_prefill_reason(prefill_config)
+    assert f"{kind} token budget 524289 exceeds" in fp8_prefill_reason(prefill_config)
 
 
 def test_model_state_uses_only_real_sequence_boundaries():

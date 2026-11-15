@@ -6,6 +6,7 @@ revision e8a93f33f0b22108f8c2364f8484ce3422552fbc.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import accumulate
 from typing import Any
 
 import numpy as np
@@ -84,6 +85,8 @@ def _fit_block(
     tokenizer: Any,
     limit: int,
     output_index: int,
+    *,
+    probe_full: bool,
 ) -> tuple[int, list[int]]:
     def encode(stop: int) -> list[int]:
         # The engine supplies the limit, including for prompts probed here
@@ -92,16 +95,23 @@ def _fit_block(
             format_prompt(query, documents[start:stop]), truncation=False, verbose=False
         )["input_ids"]
 
-    ids = encode(end)
-    if len(ids) <= limit:
-        return end, ids
-
     # The pinned template and tokenizer increase the prompt length as passages
     # are appended. Each has a numbered wrapper and its own marker, and passage
-    # count digits tokenize separately. Search prefixes to avoid tokenizing
-    # every growing prompt in a long list.
-    fits, exceeds = start, end
+    # count digits tokenize separately. Grow large prefixes before bisecting
+    # so tight budgets do not repeatedly tokenize the full document budget.
+    fits = start
     best_ids = None
+    count = end - start if probe_full else 1
+    while True:
+        exceeds = min(start + count, end)
+        ids = encode(exceeds)
+        if len(ids) > limit:
+            break
+        if exceeds == end:
+            return end, ids
+        fits, best_ids = exceeds, ids
+        count *= 2
+
     while exceeds - fits > 1:
         middle = (fits + exceeds) // 2
         ids = encode(middle)
@@ -135,16 +145,24 @@ def prepare_request(
             raise ValueError("Each query requires at least one document")
         prepared = [_truncate(doc, 8192, tokenizer) for doc in documents]
         query = _truncate(query, 1024, tokenizer)
+        # A single probe is cheaper for short text. Use cumulative characters
+        # to bound its work, with a marker per passage to account for empty text.
+        # The tokenizer still determines the block boundary.
+        sizes = list(
+            accumulate((len(doc) + len(DOC_MARKER) for doc in prepared), initial=0)
+        )
         start = 0
         while start < len(prepared):
+            stop = min(start + block_size, len(prepared))
             end, ids = _fit_block(
                 query,
                 prepared,
                 start,
-                min(start + block_size, len(prepared)),
+                stop,
                 tokenizer,
                 engine_max_length,
                 offset + start,
+                probe_full=sizes[stop] - sizes[start] <= engine_max_length,
             )
             if ids.count(DOC_TOKEN_ID) != end - start or ids.count(QUERY_TOKEN_ID) != 1:
                 raise ValueError("Jina prompt marker counts do not match the block")

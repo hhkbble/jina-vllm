@@ -47,6 +47,9 @@ class PrefillImpl(FlashAttentionImpl):
 
 
 class PrefillBackend(FlashAttentionBackend):
+    # Skip the standalone KV update op. The pool-free path has no KV storage.
+    forward_includes_kv_cache_update = True
+
     @staticmethod
     def get_impl_cls() -> type[PrefillImpl]:
         return PrefillImpl

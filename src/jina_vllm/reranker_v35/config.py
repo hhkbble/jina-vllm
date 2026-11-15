@@ -1,7 +1,6 @@
 from vllm.config import VllmConfig
 from vllm.model_executor.models.config import VerifyAndUpdateConfig
 
-from jina_vllm.config import default_qk_norm_rope_fusion
 from jina_vllm.idle_trim import validate_idle_trim_config
 
 from .contract import DEFAULT_BLOCK_SIZE, validate_block_size
@@ -30,4 +29,3 @@ class RerankerV35Config(VerifyAndUpdateConfig):
             passes.fuse_act_quant = False
         if passes.fuse_norm_quant is None:
             passes.fuse_norm_quant = False
-        default_qk_norm_rope_fusion(vllm_config)

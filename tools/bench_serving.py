@@ -35,8 +35,10 @@ async def served_max_model_len(client):
     return response.json()["data"][0]["max_model_len"]
 
 
-async def measure(args):
+async def measure(args, gpu=None):
     cases = read_workload(args.workload)
+    if not cases or any(not case["documents"] for case in cases):
+        raise ValueError("Provide a nonempty workload with documents in every case")
     workload = {
         "short-list": [c for c in cases if len(c["documents"]) <= 16][:3],
         "long-list": [c for c in cases if len(c["documents"]) >= 100][:3],
@@ -46,6 +48,9 @@ async def measure(args):
             reverse=True,
         )[:3],
     }
+    workload = {name: selected for name, selected in workload.items() if selected}
+    if not workload:
+        workload["cases"] = cases[:3]
     tokenizer = AutoTokenizer.from_pretrained(model_directory(), local_files_only=True)
     block_size = reranker_block_size(args.additional_config)
     async with httpx.AsyncClient(base_url=args.base_url, timeout=180) as client:
@@ -69,8 +74,6 @@ async def measure(args):
             "samples": samples,
             "scope": "isolated planner; not server CPU profiling",
         }
-    pynvml.nvmlInit()
-    gpu = pynvml.nvmlDeviceGetHandleByIndex(0)
     cells = []
     async with httpx.AsyncClient(base_url=args.base_url, timeout=180) as client:
         await wait_ready(client)
@@ -98,7 +101,9 @@ async def measure(args):
                 await request(case)
             for concurrency in args.concurrency:
                 semaphore = asyncio.Semaphore(concurrency)
-                peak = pynvml.nvmlDeviceGetMemoryInfo(gpu).used
+                peak = (
+                    pynvml.nvmlDeviceGetMemoryInfo(gpu).used if gpu is not None else 0
+                )
 
                 async def limited(case, semaphore=semaphore):
                     async with semaphore:
@@ -129,7 +134,7 @@ async def measure(args):
                         )
                         await asyncio.sleep(0.02)
 
-                monitoring = asyncio.create_task(monitor())
+                monitoring = asyncio.create_task(monitor()) if gpu is not None else None
                 try:
                     samples = await asyncio.gather(
                         *(
@@ -140,7 +145,8 @@ async def measure(args):
                     elapsed = time.perf_counter() - start
                 finally:
                     stop.set()
-                    await monitoring
+                    if monitoring is not None:
+                        await monitoring
                 latency = np.array([s["seconds"] for s in samples])
                 cell = dict(
                     workload=name,
@@ -153,15 +159,18 @@ async def measure(args):
                     documents_per_second=sum(s["documents"] for s in samples) / elapsed,
                     prompt_tokens_per_second=sum(s["tokens"] for s in samples)
                     / elapsed,
-                    gpu_peak_device_bytes=max(
-                        [peak, *(s["memory_used_bytes"] for s in gpu_samples)]
-                    ),
-                    gpu_util_avg_percent=float(
-                        np.mean([s["gpu_util_percent"] for s in gpu_samples])
-                    ),
-                    gpu_samples=gpu_samples,
                     samples=samples,
                 )
+                if gpu is not None:
+                    cell.update(
+                        gpu_peak_device_bytes=max(
+                            [peak, *(s["memory_used_bytes"] for s in gpu_samples)]
+                        ),
+                        gpu_util_avg_percent=float(
+                            np.mean([s["gpu_util_percent"] for s in gpu_samples])
+                        ),
+                        gpu_samples=gpu_samples,
+                    )
                 cells.append(cell)
                 print(
                     f"{name} c={concurrency}: avg {cell['avg_seconds']:.4f}s "
@@ -169,7 +178,6 @@ async def measure(args):
                     f"p95 {cell['p95_seconds']:.4f}s",
                     flush=True,
                 )
-    pynvml.nvmlShutdown()
     return dict(
         mode=args.mode,
         block_size=block_size,
@@ -178,9 +186,16 @@ async def measure(args):
         cells=cells,
         preprocessing=preprocessing,
         warmup_requests_per_cell=args.warmup_requests,
+        nvml_device=None
+        if gpu is None
+        else dict(
+            index=args.nvml_device_index,
+            uuid=pynvml.nvmlDeviceGetUUID(gpu),
+            name=pynvml.nvmlDeviceGetName(gpu),
+        ),
         notes=(
-            "Warmup per input plus optional concurrent warmup. NVML device "
-            "samples every 20 ms during timing, including other device users. "
+            "Warmup per input plus optional concurrent warmup. Optional local "
+            "NVML telemetry samples every 20 ms, including other device users. "
             "Latency excludes client semaphore waiting and includes server queueing."
         ),
     )
@@ -196,8 +211,25 @@ def main():
     parser.add_argument("--concurrency", type=int, nargs="+", default=[1, 4, 8])
     parser.add_argument("--requests", type=int, default=12)
     parser.add_argument("--warmup-requests", type=int, default=0)
+    parser.add_argument(
+        "--nvml-device-index",
+        type=int,
+        help="Sample this physical GPU on the client host (disabled by default)",
+    )
     args = parser.parse_args()
-    result = asyncio.run(measure(args))
+    if args.requests < 1 or args.warmup_requests < 0 or min(args.concurrency) < 1:
+        parser.error(
+            "requests and concurrency must be positive; warmup must be nonnegative"
+        )
+    if args.nvml_device_index is None:
+        result = asyncio.run(measure(args))
+    else:
+        pynvml.nvmlInit()
+        try:
+            gpu = pynvml.nvmlDeviceGetHandleByIndex(args.nvml_device_index)
+            result = asyncio.run(measure(args, gpu))
+        finally:
+            pynvml.nvmlShutdown()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
 

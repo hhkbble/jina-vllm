@@ -43,6 +43,10 @@ async def _merge_blocks(iterators):
                 try:
                     result = task.result()
                 except StopAsyncIteration:
+                    if index not in finished:
+                        raise RuntimeError(
+                            f"Jina block {index} ended without a finished output"
+                        ) from None
                     continue
                 if index in finished:
                     raise RuntimeError("Duplicate completed Jina block output")
@@ -95,14 +99,8 @@ class RerankerV35ServingScores(ServingScores):
     async def _collect_batch(self, ctx):
         try:
             await super()._collect_batch(ctx)
-        except BaseException as error:
+        except BaseException:
             await self._cleanup(ctx)
-            # Native collector uses ValueError, which HTTP classifies as 400.
-            # An incomplete engine result batch is an internal failure.
-            if isinstance(error, ValueError) and str(error) == (
-                "Failed to generate results for all prompts"
-            ):
-                raise RuntimeError(str(error)) from error
             raise
 
     async def _prepare_generators(self, ctx):

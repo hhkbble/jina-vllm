@@ -1,7 +1,6 @@
 """Run one precision at a time; preserve vectors and scores for later comparison."""
 
 import argparse
-import hashlib
 import json
 import os
 import time
@@ -52,7 +51,7 @@ def engine_kwargs(args):
         additional_config=args.additional_config,
         max_model_len=args.max_model_len,
         max_num_batched_tokens=args.batch_tokens,
-        max_num_seqs=4,
+        max_num_seqs=16,
         gpu_memory_utilization=0.75,
         enable_chunked_prefill=not args.pool_free,
         enable_prefix_caching=False,
@@ -77,8 +76,6 @@ def engine_kwargs(args):
                 "linear_backend": "cutlass",
             },
         )
-    if args.native_quant_op:
-        options["compilation_config"] = {"custom_ops": ["none", "+quant_fp8"]}
     if args.profile:
         options["profiler_config"] = {
             "profiler": "torch",
@@ -98,16 +95,6 @@ def inspect_model(model):
             kernel = getattr(method, "fp8_linear", None)
             scale = getattr(module, "weight_scale", None)
 
-            def tensor_hash(tensor):
-                return hashlib.sha256(
-                    tensor.detach()
-                    .cpu()
-                    .contiguous()
-                    .view(torch.uint8)
-                    .numpy()
-                    .tobytes()
-                ).hexdigest()
-
             linears.append(
                 dict(
                     name=name,
@@ -117,8 +104,6 @@ def inspect_model(model):
                     shape=list(module.weight.shape),
                     scale_dtype=None if scale is None else str(scale.dtype),
                     input_scale=str(getattr(module, "input_scale", None)),
-                    weight_sha256=tensor_hash(module.weight),
-                    scale_sha256=None if scale is None else tensor_hash(scale),
                 )
             )
         if isinstance(module, Attention):
@@ -325,11 +310,6 @@ def main():
         help="Select a Jina FP8 prefill mode with --pool-free",
     )
     parser.add_argument("--profile", type=Path)
-    parser.add_argument(
-        "--native-quant-op",
-        action="store_true",
-        help="Diagnostic: use native FP8 activation quant custom op",
-    )
     parser.add_argument(
         "--hf-attention",
         default="flex_attention",

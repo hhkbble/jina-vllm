@@ -2,11 +2,14 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
+import torch
 from transformers import AutoConfig
 from vllm.config import CompilationMode
 from vllm.config.compilation import CompilationConfig
+from vllm.engine.arg_utils import EngineArgs
 
 from jina_vllm.config import configure_large_batch_swiglu
+from jina_vllm.plugin import PLUGIN_NAME, register
 from jina_vllm.reranker_v35.config import reranker_block_size
 from jina_vllm.reranker_v35.contract import validate_model_contract
 
@@ -21,6 +24,68 @@ def test_block_size_requires_positive_integer(value):
     config = {"jina_vllm": {"reranker_v35": {"block_size": value}}}
     with pytest.raises(ValueError, match="positive integer"):
         reranker_block_size(config)
+
+
+@pytest.mark.parametrize(
+    ("engine_options", "compile_options", "disable_compile", "mode", "fusion"),
+    [
+        ({}, {}, False, CompilationMode.VLLM_COMPILE, True),
+        ({"optimization_level": 0}, {}, False, CompilationMode.NONE, False),
+        ({"enforce_eager": True}, {}, False, CompilationMode.NONE, False),
+        ({}, {"backend": "eager"}, False, CompilationMode.VLLM_COMPILE, False),
+        ({}, {}, True, CompilationMode.NONE, False),
+        (
+            {},
+            {"pass_config": {"enable_qk_norm_rope_fusion": False}},
+            False,
+            CompilationMode.VLLM_COMPILE,
+            False,
+        ),
+        (
+            {"optimization_level": 0},
+            {"pass_config": {"enable_qk_norm_rope_fusion": True}},
+            False,
+            CompilationMode.NONE,
+            True,
+        ),
+        (
+            {},
+            {"custom_ops": ["none", "-rotary_embedding"]},
+            False,
+            CompilationMode.VLLM_COMPILE,
+            False,
+        ),
+    ],
+)
+def test_qk_fusion_follows_resolved_compilation(
+    snapshot,
+    monkeypatch,
+    engine_options,
+    compile_options,
+    disable_compile,
+    mode,
+    fusion,
+):
+    monkeypatch.setenv("VLLM_PLUGINS", PLUGIN_NAME)
+    monkeypatch.setenv("VLLM_USE_BREAKABLE_CUDAGRAPH", "0")
+    monkeypatch.setenv("TORCH_COMPILE_DISABLE", str(int(disable_compile)))
+    monkeypatch.setattr("jina_vllm.config.current_platform.is_cuda_alike", lambda: True)
+    register()
+    config = EngineArgs(
+        model=str(snapshot),
+        model_impl="vllm",
+        runner="pooling",
+        dtype="bfloat16",
+        max_model_len=8192,
+        hf_overrides={"architectures": ["JinaRerankerV35"], "embedding_size": 512},
+        pooler_config={"task": "token_embed"},
+        compilation_config={"custom_ops": ["none"], **compile_options},
+        **engine_options,
+    ).create_engine_config()
+    compilation = config.compilation_config
+    assert compilation.mode == mode
+    assert compilation.pass_config.enable_qk_norm_rope_fusion is fusion
+    assert compilation.custom_ops.count("+rotary_embedding") == int(fusion)
 
 
 @pytest.fixture
@@ -90,6 +155,7 @@ def model_contract(snapshot):
     return SimpleNamespace(
         model_config=SimpleNamespace(
             hf_config=config,
+            dtype=torch.bfloat16,
             disable_sliding_window=False,
             max_model_len=131072,
         ),
@@ -121,6 +187,12 @@ def test_normalized_rope_and_export_metadata(model_contract):
 def test_model_semantic_mismatches(model_contract, field, value):
     setattr(model_contract.model_config.hf_config, field, value)
     with pytest.raises(ValueError, match="contract"):
+        validate_model_contract(model_contract)
+
+
+def test_reranker_rejects_fp16_marker_vectors(model_contract):
+    model_contract.model_config.dtype = torch.float16
+    with pytest.raises(ValueError, match="dtype must be bfloat16"):
         validate_model_contract(model_contract)
 
 

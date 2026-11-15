@@ -29,6 +29,9 @@ class JinaFP8PrefillImpl(AttentionImpl[PrefillMetadata]):
             )
         if attn_type != AttentionType.DECODER:
             raise ValueError("JINA_FP8_PREFILL requires causal decoder attention")
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+        self.head_size = head_size
         self.scale = scale
         self.window = sliding_window or 0
         self.sliding_window = (sliding_window - 1, 0) if sliding_window else (-1, -1)

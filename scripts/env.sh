@@ -17,7 +17,7 @@ export HF_MODULES_CACHE="$JINA_VLLM_PROJECT_ROOT/.local/cache/hf-modules"
 
 # Preserve caller settings under either name recognized by the CUDA allocator.
 if [[ ! -v PYTORCH_CUDA_ALLOC_CONF && ! -v PYTORCH_ALLOC_CONF ]]; then
-    export PYTORCH_ALLOC_CONF=backend:native,expandable_segments:True
+    export PYTORCH_CUDA_ALLOC_CONF=backend:native,expandable_segments:True
 fi
 
 mkdir -p -- "$TMPDIR" "$JINA_VLLM_OUTPUT_DIR" "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" \

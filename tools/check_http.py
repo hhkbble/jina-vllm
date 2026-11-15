@@ -18,11 +18,9 @@ from tools.bench_serving import served_max_model_len, wait_ready
 from tools.compare_reference import model_directory, read_workload
 
 
-def metric(text, name, reason=None):
+def metric(text, name):
     for line in text.splitlines():
-        if line.startswith(name + "{") and (
-            reason is None or f'finished_reason="{reason}"' in line
-        ):
+        if line.startswith(name + "{"):
             return float(line.rsplit(" ", 1)[1])
     return 0.0
 
@@ -125,6 +123,7 @@ async def check(args):
         for extra in [
             {"max_tokens_per_doc": 12},
             {"instruction": "other"},
+            {"chat_template": "other"},
             {"truncate_prompt_tokens": 100},
             {"padding": "max_length"},
             {"top_n": None},
@@ -136,8 +135,6 @@ async def check(args):
         # A real TCP close after scheduler admission; another client remains valid.
         log_offset = args.server_log.stat().st_size
         disconnect_id = "socket-disconnect-" + uuid.uuid4().hex
-        before = (await client.get("/metrics")).text
-        abort_before = metric(before, "vllm:request_success_total", "abort")
         target = urlsplit(args.base_url)
         _, writer = await asyncio.open_connection(target.hostname, target.port or 80)
         capacity = next(case for case in cases if case["id"] == "capacity")
@@ -166,11 +163,11 @@ async def check(args):
         survived = await survivor
         assert len(survived["results"]) == len(short["documents"])
         deadline = time.monotonic() + 10
-        abort_after = abort_before
         while time.monotonic() < deadline:
             after = (await client.get("/metrics")).text
-            abort_after = metric(after, "vllm:request_success_total", "abort")
-            log_text = args.server_log.read_text()[log_offset:]
+            with args.server_log.open("rb") as log:
+                log.seek(log_offset)
+                log_text = log.read().decode("utf-8", errors="replace")
             abort_lines = [
                 line
                 for line in log_text.splitlines()
@@ -183,8 +180,6 @@ async def check(args):
         assert metric(after, "vllm:num_requests_running") == 0
         disconnect = dict(
             admitted=admitted,
-            abort_count_before=abort_before,
-            abort_count_after=abort_after,
             survivor_passed=True,
             abort_log=abort_lines,
             running_after=metric(after, "vllm:num_requests_running"),

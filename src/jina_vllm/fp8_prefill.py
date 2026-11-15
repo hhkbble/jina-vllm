@@ -89,7 +89,7 @@ def pack(
     return packed, scales
 
 
-@triton.jit
+@triton.jit(do_not_specialize=["B"])
 def _attention(
     Packed,
     Scales,
@@ -99,7 +99,7 @@ def _attention(
     OS,
     OHS,
     SM,
-    B: tl.constexpr,
+    B: tl.int32,
     WINDOW: tl.constexpr,
     M: tl.constexpr,
     N: tl.constexpr,

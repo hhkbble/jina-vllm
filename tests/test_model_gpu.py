@@ -68,6 +68,7 @@ def artifacts():
 def test_actual_model_structure_and_raw_outputs(artifacts, mode):
     _, runs = artifacts
     run = runs[mode]
+    assert run["mode"] == mode
     validate_structure(run)
     assert len(run["results"]) >= 4
     by_id = {row["id"]: row for row in run["results"]}
@@ -85,7 +86,9 @@ def test_actual_model_structure_and_raw_outputs(artifacts, mode):
 
 def test_actual_sm120_fp8_kernel_trace(artifacts):
     directory, _ = artifacts
-    with gzip.open(next((directory / "fp8-trace").glob("*.json.gz"))) as stream:
+    traces = list((directory / "fp8-trace").glob("*.json.gz"))
+    assert len(traces) == 1, f"Expected one FP8 trace, found {traces}"
+    with gzip.open(traces[0]) as stream:
         trace = json.load(stream)
     events = trace["traceEvents"]
     assert any(e.get("name") == "_C::cutlass_scaled_mm" for e in events)

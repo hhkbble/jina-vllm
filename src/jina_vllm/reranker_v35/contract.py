@@ -44,6 +44,8 @@ def validate_tokenizer(tokenizer) -> None:
 
 
 def validate_model_contract(vllm_config) -> None:
+    import torch
+
     validate_version()
     model = vllm_config.model_config
     config = model.hf_config
@@ -69,6 +71,8 @@ def validate_model_contract(vllm_config) -> None:
     ]
     if tuple(config.layer_types) != LAYER_TYPES:
         errors.append("layer_types must match the official 16 sliding / 12 full layers")
+    if model.dtype != torch.bfloat16:
+        errors.append("dtype must be bfloat16 for BF16 marker vectors")
     parallel = vllm_config.parallel_config
     if parallel.tensor_parallel_size != 1 or parallel.pipeline_parallel_size != 1:
         errors.append("tensor_parallel_size and pipeline_parallel_size must be 1")

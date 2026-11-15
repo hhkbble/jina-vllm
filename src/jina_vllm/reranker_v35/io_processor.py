@@ -73,6 +73,7 @@ class RerankerV35ScoringIOProcessor(ScoringIOProcessor):
             "max_tokens_per_query": (0, 1024),
             "max_tokens_per_doc": (0, 8192),
             "instruction": (None, ""),
+            "chat_template": (None,),
             "truncate_prompt_tokens": (None,),
             "padding": (None, "do_not_pad"),
             "use_activation": (None, False),
