@@ -46,7 +46,9 @@ def test_architecture_requires_explicit_allowlist(allowed, registered):
         f"assert ({ARCH!r} in MODELS_CONFIG_MAP) == {registered!r}; "
         f"assert ({EMBEDDINGS_ARCH!r} in MODELS_CONFIG_MAP) == {registered!r}; "
         "assert MODELS_CONFIG_MAP['JinaEmbeddingsV5Model'] "
-        "is JinaEmbeddingsV5ModelConfig"
+        "is JinaEmbeddingsV5ModelConfig; "
+        "import sys; assert 'vllm.v1.worker.gpu_worker' not in sys.modules; "
+        "assert 'jina_vllm.fp8_block_prefill' not in sys.modules"
     )
     env = dict(os.environ)
     env.pop("VLLM_PLUGINS", None)

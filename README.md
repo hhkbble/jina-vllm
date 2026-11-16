@@ -183,14 +183,43 @@ vllm serve "${model[@]}" "${pool_free[@]}" \
   --attention-backend JINA_FP8_PREFILL --kv-cache-dtype fp8_per_token_head_p_row
 ```
 
-Use `fp8_per_token_head_p_tile` for tile scaling. Both modes use E4M3
-attention math with BF16 inputs and outputs and zero physical KV allocation.
+Use `fp8_per_token_head_p_tile` for tile scaling or `fp8_per_block` for
+sequence-local block scaling. All three modes take BF16 Q/K/V, use E4M3
+quantization and write BF16 output with zero physical KV allocation.
 Tile scaling shares a scale across the KV tile, so even a masked column in
-the same tile can affect rounding. This backend was runtime-tested on RTX 5090.
+the same tile can affect rounding. Block scaling shares one scale per
+128-token block and head for each of Q, K and V. A future token in the
+same block can affect rounding through that scale. Block scaling supports
+full causal attention and the 1,024-token causal window.
+
+With `fp8_per_block`, each GPU worker tunes five token buckets (1,024 through
+16,384 in powers of two) for each mask at startup. Each key uses a single
+sequence and 72 Triton candidates. Allow extra startup time on an empty
+cache. Restarting with matching results in Triton's cache
+(`TRITON_CACHE_DIR` when set) reuses the selected configurations. Requests
+launch the selected kernel directly with no benchmarking. Mixed batches
+use the bucket for their actual total tokens rounded up. Totals greater than
+16,384 reuse that bucket's configuration while processing their full lengths.
+
+For a local cold and cached startup check, run the same block-mode serve
+command twice with the same initially empty `TRITON_CACHE_DIR` and
+`TRITON_PRINT_AUTOTUNING=1`. To check piecewise graph replay with the short
+rerank request above, append both arguments when starting the loopback server.
+
+```bash
+--compilation-config '{"cudagraph_capture_sizes":[256]}'
+--profiler-config '{"profiler":"torch","torch_profiler_dir":".local/output/fp8-block-trace"}'
+```
+
+Send the request once after startup, then bracket a repeat request with
+`POST /start_profile` and `POST /stop_profile`. Look for `cudaGraphLaunch` in the
+trace.
+
+This backend was runtime-tested on RTX 5090.
 It accepts batched and scheduled budgets of up to 524,288 tokens per worker
-step and rejects incompatible configurations at startup. In the frozen
-reranker comparison, both FP8 modes exceeded the baseline numerical error
-thresholds.
+step and rejects incompatible configurations at startup. Each FP8 mode
+exceeded numerical error thresholds in a frozen reranker comparison
+against BF16 FA2.
 
 ### W8A8 Linear
 

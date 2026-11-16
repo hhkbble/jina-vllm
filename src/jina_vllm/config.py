@@ -14,10 +14,13 @@ from .reranker_v35.contract import ARCH as RERANKER_V35_ARCH
 
 logger = init_logger("vllm.jina_vllm.config")
 
-FP8PrefillMode = Literal["fp8_per_token_head_p_row", "fp8_per_token_head_p_tile"]
+FP8PrefillMode = Literal[
+    "fp8_per_token_head_p_row", "fp8_per_token_head_p_tile", "fp8_per_block"
+]
 FP8_P_ROW = "fp8_per_token_head_p_row"
 FP8_P_TILE = "fp8_per_token_head_p_tile"
-FP8_PREFILL_MODES = (FP8_P_ROW, FP8_P_TILE)
+FP8_PER_BLOCK = "fp8_per_block"
+FP8_PREFILL_MODES = (FP8_P_ROW, FP8_P_TILE, FP8_PER_BLOCK)
 FP8_PREFILL_BACKEND = "JINA_FP8_PREFILL"
 JINA_ARCHITECTURES = frozenset({RERANKER_V35_ARCH, EMBEDDINGS_V5_TEXT_SMALL_ARCH})
 

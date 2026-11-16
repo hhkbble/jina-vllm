@@ -21,6 +21,7 @@ from jina_vllm.config import (
 )
 from jina_vllm.embeddings_v5_text_small import ARCH as EMBEDDINGS_ARCH
 from jina_vllm.fp8_backend import JinaFP8PrefillImpl
+from jina_vllm.fp8_block_prefill import token_bucket
 from jina_vllm.prefill import (
     PrefillModelState,
     fp8_prefill_reason,
@@ -112,7 +113,7 @@ def test_pool_free_checks_every_resolved_layer():
 
 
 @pytest.mark.parametrize(
-    "mode", ["fp8_per_token_head_p_row", "fp8_per_token_head_p_tile"]
+    "mode", ["fp8_per_token_head_p_row", "fp8_per_token_head_p_tile", "fp8_per_block"]
 )
 def test_explicit_fp8_config_and_reranker_quant_fusion_defaults(mode):
     register_prefill_modes()
@@ -137,6 +138,7 @@ def test_explicit_fp8_config_and_reranker_quant_fusion_defaults(mode):
     [
         ("JINA_FP8_PREFILL", "bfloat16", "JinaRerankerV35", "requires kv-cache-dtype"),
         ("FLASH_ATTN", "fp8_per_token_head_p_row", "JinaRerankerV35", "requires JINA"),
+        ("FLASH_ATTN", "fp8_per_block", "JinaRerankerV35", "requires JINA"),
         (
             "JINA_FP8_PREFILL",
             "fp8_per_token_head_p_tile",
@@ -165,7 +167,7 @@ def test_registered_fp8_selection_rejects_invalid_pair(
 
 
 @pytest.mark.parametrize(
-    "mode", ["fp8_per_token_head_p_row", "fp8_per_token_head_p_tile"]
+    "mode", ["fp8_per_token_head_p_row", "fp8_per_token_head_p_tile", "fp8_per_block"]
 )
 def test_text_small_architecture_accepts_explicit_fp8_prefill(mode):
     register_prefill_modes()
@@ -175,6 +177,21 @@ def test_text_small_architecture_accepts_explicit_fp8_prefill(mode):
         attention_config=AttentionConfig(backend=AttentionBackendEnum.JINA_FP8_PREFILL),
     )
     validate_prefill_selection(config)
+
+
+@pytest.mark.parametrize(
+    "tokens,bucket",
+    [
+        (1, 1024),
+        (1024, 1024),
+        (1025, 2048),
+        (4097, 8192),
+        (16385, 16384),
+        (262144, 16384),
+    ],
+)
+def test_fp8_block_bucket_uses_actual_tokens_with_cap(tokens, bucket):
+    assert token_bucket(tokens) == bucket
 
 
 @pytest.mark.parametrize(
@@ -293,3 +310,46 @@ def test_model_state_uses_only_real_sequence_boundaries():
     batch.prefill_len_np[1] = 9
     with pytest.raises(RuntimeError, match="requires complete prompts"):
         state.preprocess_state(batch, (), None, None)
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "auto",
+        "bfloat16",
+        "fp8_per_token_head_p_row",
+        "fp8_per_token_head_p_tile",
+        "fp8_per_block",
+    ],
+)
+def test_pool_free_startup_tunes_only_fp8_per_block(monkeypatch, mode):
+    state = object.__new__(PrefillModelState)
+    state.vllm_config = SimpleNamespace(cache_config=SimpleNamespace(cache_dtype=mode))
+    state.device = torch.device("cuda", 0)
+    layers = {
+        name: SimpleNamespace(kv_cache=torch.empty(0), impl=SimpleNamespace())
+        for name in ("sliding", "full")
+    }
+    monkeypatch.setattr(
+        "jina_vllm.prefill.get_layers_from_vllm_config", lambda config, cls: layers
+    )
+    config = object()
+    calls = []
+
+    def warmup(device):
+        calls.append(device)
+        return config
+
+    monkeypatch.setattr("jina_vllm.fp8_block_prefill.warmup", warmup)
+    state.initialize_kv_cache(
+        SimpleNamespace(kv_cache_groups=[], kv_cache_tensors=[]), None
+    )
+    assert state.layer_names == ("sliding", "full")
+    if mode == "fp8_per_block":
+        assert calls == [state.device]
+        assert all(layer.impl.block_configs is config for layer in layers.values())
+    else:
+        assert not calls
+        assert all(
+            not hasattr(layer.impl, "block_configs") for layer in layers.values()
+        )

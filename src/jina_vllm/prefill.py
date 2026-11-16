@@ -19,7 +19,7 @@ from vllm.v1.worker.gpu.model_states.default import DefaultModelState
 from vllm.v1.worker.gpu.model_states.interface import ModelSpecificAttnMetadata
 from vllm.v1.worker.utils import AttentionGroup
 
-from .config import FP8_PREFILL_BACKEND, FP8PrefillMode
+from .config import FP8_PER_BLOCK, FP8_PREFILL_BACKEND, FP8PrefillMode
 
 if TYPE_CHECKING:
     from vllm.model_executor.models.qwen3 import Qwen3Attention
@@ -174,6 +174,13 @@ class PrefillModelState(DefaultModelState):
             "kv_cache_groups=0, layer_kv_elements=0 (%d layers)",
             len(layers),
         )
+        if self.vllm_config.cache_config.cache_dtype == FP8_PER_BLOCK:
+            from .fp8_block_prefill import warmup
+
+            # V2 initializes model state after loading and before graph capture.
+            configs = warmup(self.device)
+            for layer in layers.values():
+                layer.impl.block_configs = configs
 
     def preprocess_state(
         self,

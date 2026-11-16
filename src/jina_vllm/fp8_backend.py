@@ -4,7 +4,7 @@ import torch
 from vllm.platforms.interface import DeviceCapability
 from vllm.v1.attention.backend import AttentionBackend, AttentionImpl, AttentionType
 
-from .config import FP8_P_TILE, FP8_PREFILL_BACKEND, FP8_PREFILL_MODES
+from .config import FP8_P_TILE, FP8_PER_BLOCK, FP8_PREFILL_BACKEND, FP8_PREFILL_MODES
 from .fp8_prefill import FP8_DEVICE_CAPABILITIES, attend, attention_tile, pack
 from .prefill import PrefillMetadata, run_packed_prefill
 
@@ -36,7 +36,18 @@ class JinaFP8PrefillImpl(AttentionImpl[PrefillMetadata]):
         self.window = sliding_window or 0
         self.sliding_window = (sliding_window - 1, 0) if sliding_window else (-1, -1)
         self.kv_cache_dtype = kv_cache_dtype
-        self.fp8_tile = attention_tile(torch.cuda.get_device_capability(), self.window)
+        if kv_cache_dtype == FP8_PER_BLOCK:
+            from .fp8_block_prefill import WINDOWS
+
+            if self.window not in WINDOWS:
+                raise ValueError(
+                    "fp8_per_block requires full causal or a window of 1024"
+                )
+            self.block_configs = None
+        else:
+            self.fp8_tile = attention_tile(
+                torch.cuda.get_device_capability(), self.window
+            )
 
     def forward(
         self,
@@ -55,6 +66,20 @@ class JinaFP8PrefillImpl(AttentionImpl[PrefillMetadata]):
         )
 
     def _attend(self, q, k, v, metadata: PrefillMetadata, output):
+        if self.kv_cache_dtype == FP8_PER_BLOCK:
+            from . import fp8_block_prefill
+
+            if self.block_configs is None:
+                raise RuntimeError("fp8_per_block startup tuning did not run")
+            fp8_block_prefill.attend(
+                fp8_block_prefill.pack(q, k, v, metadata.offsets),
+                metadata.offsets,
+                output,
+                self.window,
+                self.scale,
+                self.block_configs,
+            )
+            return
         attend(
             pack(q, k, v),
             metadata.offsets,

@@ -5,7 +5,9 @@ import os
 
 import pytest
 import torch
+from vllm.triton_utils import triton
 
+from jina_vllm import fp8_block_prefill as block
 from jina_vllm.fp8_prefill import attend, attention_tile, pack
 
 pytestmark = [
@@ -191,4 +193,133 @@ def test_fused_qkv_views_pack_like_independent_inputs():
         expected_fp8.to(data.dtype).view(torch.uint8),
         atol=0,
         rtol=0,
+    )
+
+
+def quantize_blocks(x):
+    length, heads, dim = x.shape
+    padded = torch.nn.functional.pad(x.float(), (0, 0, 0, 0, 0, -length % 128))
+    tiles = padded.reshape(-1, 128, heads, dim)
+    scales = tiles.abs().amax((1, 3)) * (1.0 / 448.0)
+    scales = torch.where(scales > 0, scales, 1.0 / 448.0)
+    data = (tiles / scales[:, None, :, None]).to(torch.float8_e4m3fn)
+    return data, scales
+
+
+def block_oracle(q, k, v, window, n, scale):
+    length = len(q)
+    payload = [quantize_blocks(x) for x in (q, k, v)]
+    data = [x[0].flatten(0, 1)[:length].float().transpose(0, 1) for x in payload]
+    scales = [x[1].transpose(0, 1) for x in payload]
+    qh, kh, vh = data
+    sq, sk, sv = scales
+    qk = qh @ kh.repeat_interleave(2, 0).transpose(-1, -2)
+    sq = sq.repeat_interleave(128, 1)[:, :length] * scale
+    sk, sv = [x.repeat_interleave(2, 0) for x in (sk, sv)]
+    pos = torch.arange(length, device=q.device)
+    maximum = qk.new_full((16, length), -torch.inf)
+    den = torch.zeros_like(maximum)
+    acc = torch.zeros_like(qh)
+    for i in range(0, length, n):
+        cols = pos[i : i + n]
+        delta = pos[:, None] - cols
+        mask = delta >= 0
+        if window:
+            mask &= delta < window
+        logits = qk[..., i : i + n] * (sq * sk[:, i // 128, None])[..., None]
+        logits = logits.masked_fill(~mask, -torch.inf)
+        new = torch.maximum(maximum, logits.amax(-1))
+        safe = torch.where(new.isneginf(), 0.0, new)
+        alpha = (maximum - safe).exp()
+        p = (logits - safe[..., None]).exp()
+        p8 = (p * 256).to(torch.float8_e4m3fn).float()
+        values = vh[:, i : i + n].repeat_interleave(2, 0)
+        acc = (
+            acc * alpha[..., None]
+            + (p8 @ values) * (sv[:, i // 128] / 256)[:, None, None]
+        )
+        den = den * alpha + p.sum(-1)
+        maximum = new
+    return (acc / den[..., None]).transpose(0, 1), payload
+
+
+@pytest.mark.parametrize("window,m,n", [(0, 128, 64), (1024, 32, 128), (1024, 64, 32)])
+@torch.inference_mode()
+def test_block_prefill_matches_independent_policy(window, m, n):
+    torch.set_float32_matmul_precision("highest")
+    torch.manual_seed(42)
+    lengths = [19, 1153, 37]
+    tokens = sum(lengths)
+    qkv = torch.randn((tokens + 1, 32, 128), device="cuda", dtype=torch.bfloat16)
+    q, k, v = qkv[1:].split((16, 8, 8), dim=1)
+    v[19:147].zero_()
+    v[147:] *= 1.5
+    offsets = torch.tensor([0, 19, 1172, tokens], dtype=torch.int32, device="cuda")
+    packed = block.pack(q, k, v, offsets)
+    backing = torch.full(
+        (tokens + 3, 33, 140), -42, device="cuda", dtype=torch.bfloat16
+    )
+    out = backing[2:-1, 1:33:2, 4:132]
+    scale = 0.125
+    config = triton.Config({"M": m, "N": n}, num_warps=4, num_stages=2)
+    block.attend(packed, offsets, out, window, scale, {(window, 2048): config})
+
+    parts = []
+    start = 0
+    for seq, length in enumerate(lengths):
+        end = start + length
+        inputs = [x[start:end] for x in (q, k, v)]
+        expected, payload = block_oracle(*inputs, window, n, scale)
+        error = (out[start:end].float() - expected).norm() / expected.norm()
+        assert error < 0.003
+
+        slot = start // 128 + seq
+        for i, (quantized, scales) in enumerate(payload):
+            count, _, heads, _ = quantized.shape
+            data, factors = packed[2 * i : 2 * i + 2]
+            expected_data = quantized.permute(2, 0, 1, 3)
+            if i == 2:
+                expected_data = expected_data.transpose(2, 3)
+            torch.testing.assert_close(
+                data.reshape(heads, -1, 128, 128)[:, slot : slot + count].view(
+                    torch.uint8
+                ),
+                expected_data.view(torch.uint8),
+                atol=0,
+                rtol=0,
+            )
+            torch.testing.assert_close(factors[:, slot : slot + count], scales.T)
+        single = torch.empty_like(out[start:end])
+        cu = torch.tensor([0, length], dtype=torch.int32, device="cuda")
+        block.attend(
+            block.pack(*inputs, cu),
+            cu,
+            single,
+            window,
+            scale,
+            {(window, block.token_bucket(length)): config},
+        )
+        parts.append(single)
+        start = end
+    torch.testing.assert_close(out, torch.cat(parts), atol=0, rtol=0)
+    out.fill_(-42)
+    assert bool((backing == -42).all())
+
+
+@torch.inference_mode()
+def test_block_prefill_window_excludes_key_at_distance_1024():
+    length = 1153
+    q = torch.zeros((length, 16, 128), device="cuda", dtype=torch.bfloat16)
+    k, v = torch.zeros_like(q[:, :8]), torch.zeros_like(q[:, :8])
+    v[0] = 1024
+    v[127] = 2048
+    cu = torch.tensor([0, length], dtype=torch.int32, device="cuda")
+    out = torch.empty_like(q)
+    config = triton.Config({"M": 128, "N": 64}, num_warps=8, num_stages=3)
+    block.attend(
+        block.pack(q, k, v, cu), cu, out, 1024, 128**-0.5, {(1024, 2048): config}
+    )
+    expected = torch.tensor([3, 2, 2, 0, 0], device="cuda", dtype=torch.bfloat16)
+    torch.testing.assert_close(
+        out[[1023, 1024, 1150, 1151, 1152], 0, 0], expected, atol=0, rtol=0
     )
