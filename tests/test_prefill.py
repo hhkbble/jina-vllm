@@ -278,12 +278,15 @@ def test_fp8_prefill_checks_device_and_linear_backend(monkeypatch):
     ("architecture", "mode", "capability", "allowed"),
     [
         (RERANKER_ARCH, "fp8_per_block", (12, 0), True),
+        (EMBEDDINGS_ARCH, "fp8_per_block", (12, 0), True),
+        ("Qwen3ForCausalLM", "fp8_per_block", (12, 0), False),
         (RERANKER_ARCH, "fp8_per_block", (8, 9), False),
+        (EMBEDDINGS_ARCH, "fp8_per_block", (8, 9), False),
         (RERANKER_ARCH, "fp8_per_token_head_p_row", (12, 0), False),
-        (EMBEDDINGS_ARCH, "fp8_per_block", (12, 0), False),
+        (EMBEDDINGS_ARCH, "fp8_per_token_head_p_tile", (12, 0), False),
     ],
 )
-def test_humming_prefill_requires_sm120_reranker_block_mode(
+def test_humming_prefill_requires_sm120_jina_block_mode(
     monkeypatch, prefill_config, architecture, mode, capability, allowed
 ):
     monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)

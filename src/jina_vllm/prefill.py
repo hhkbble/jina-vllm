@@ -19,8 +19,12 @@ from vllm.v1.worker.gpu.model_states.default import DefaultModelState
 from vllm.v1.worker.gpu.model_states.interface import ModelSpecificAttnMetadata
 from vllm.v1.worker.utils import AttentionGroup
 
-from .config import FP8_PER_BLOCK, FP8_PREFILL_BACKEND, FP8PrefillMode
-from .reranker_v35.contract import ARCH as RERANKER_ARCH
+from .config import (
+    FP8_PER_BLOCK,
+    FP8_PREFILL_BACKEND,
+    JINA_ARCHITECTURES,
+    FP8PrefillMode,
+)
 
 if TYPE_CHECKING:
     from vllm.model_executor.models.qwen3 import Qwen3Attention
@@ -148,13 +152,13 @@ def fp8_prefill_reason(config: VllmConfig) -> str | None:
     if (
         quantization == "humming"
         and config.cache_config.cache_dtype == FP8_PER_BLOCK
-        and config.model_config.architecture == RERANKER_ARCH
+        and config.model_config.architecture in JINA_ARCHITECTURES
         and capability == (12, 0)
     ):
         return None
     return (
         "Linear must be BF16 or use fp8_per_channel with the CUTLASS backend. "
-        "Humming is supported with fp8_per_block on JinaRerankerV35 on SM120."
+        "Humming is supported with fp8_per_block on the Jina plugin models on SM120."
     )
 
 
