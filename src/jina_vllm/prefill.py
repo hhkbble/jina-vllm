@@ -20,6 +20,7 @@ from vllm.v1.worker.gpu.model_states.interface import ModelSpecificAttnMetadata
 from vllm.v1.worker.utils import AttentionGroup
 
 from .config import FP8_PER_BLOCK, FP8_PREFILL_BACKEND, FP8PrefillMode
+from .reranker_v35.contract import ARCH as RERANKER_ARCH
 
 if TYPE_CHECKING:
     from vllm.model_executor.models.qwen3 import Qwen3Attention
@@ -139,12 +140,22 @@ def fp8_prefill_reason(config: VllmConfig) -> str | None:
     if config.cache_config.kv_cache_dtype_skip_layers:
         return "kv-cache-dtype-skip-layers was configured"
     quantization = config.model_config.quantization
-    if quantization is not None and (
-        quantization != "fp8_per_channel"
-        or config.kernel_config.linear_backend != "cutlass"
+    if quantization is None or (
+        quantization == "fp8_per_channel"
+        and config.kernel_config.linear_backend == "cutlass"
     ):
-        return "Linear must be BF16 or use fp8_per_channel with the CUTLASS backend"
-    return None
+        return None
+    if (
+        quantization == "humming"
+        and config.cache_config.cache_dtype == FP8_PER_BLOCK
+        and config.model_config.architecture == RERANKER_ARCH
+        and capability == (12, 0)
+    ):
+        return None
+    return (
+        "Linear must be BF16 or use fp8_per_channel with the CUTLASS backend. "
+        "Humming is supported with fp8_per_block on JinaRerankerV35 on SM120."
+    )
 
 
 @dataclass(frozen=True)

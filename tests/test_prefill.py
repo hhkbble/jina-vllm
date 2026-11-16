@@ -29,6 +29,7 @@ from jina_vllm.prefill import (
     paged_kv_reason,
 )
 from jina_vllm.reranker_v35.config import RerankerV35Config
+from jina_vllm.reranker_v35.contract import ARCH as RERANKER_ARCH
 
 
 @pytest.fixture
@@ -271,6 +272,33 @@ def test_fp8_prefill_checks_device_and_linear_backend(monkeypatch):
     assert "CUTLASS" in fp8_prefill_reason(config)
     config.kernel_config.linear_backend = "cutlass"
     assert fp8_prefill_reason(config) is None
+
+
+@pytest.mark.parametrize(
+    ("architecture", "mode", "capability", "allowed"),
+    [
+        (RERANKER_ARCH, "fp8_per_block", (12, 0), True),
+        (RERANKER_ARCH, "fp8_per_block", (8, 9), False),
+        (RERANKER_ARCH, "fp8_per_token_head_p_row", (12, 0), False),
+        (EMBEDDINGS_ARCH, "fp8_per_block", (12, 0), False),
+    ],
+)
+def test_humming_prefill_requires_sm120_reranker_block_mode(
+    monkeypatch, prefill_config, architecture, mode, capability, allowed
+):
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(
+        "jina_vllm.prefill.current_platform.get_device_capability",
+        lambda device_id: capability,
+    )
+    prefill_config.model_config.quantization = "humming"
+    prefill_config.model_config.architecture = architecture
+    prefill_config.cache_config.cache_dtype = mode
+    reason = fp8_prefill_reason(prefill_config)
+    if allowed:
+        assert reason is None
+    else:
+        assert "Humming is supported with fp8_per_block" in reason
 
 
 @pytest.mark.parametrize(

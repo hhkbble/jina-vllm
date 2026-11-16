@@ -232,6 +232,23 @@ BF16 activations with either Linear mode. Text Small merges the selected
 adapter before quantizing and keeps its embedding table in BF16 and pooling
 head in FP32. Linear and attention precision are independent.
 
+### W4A4 Linear
+
+On SM120, the reranker can use Humming online W4A4 with pool-free
+`fp8_per_block` attention. Set the two schemas below and add
+`--quantization humming` to the block-mode serve command.
+
+```bash
+export VLLM_HUMMING_ONLINE_QUANT_CONFIG='{"dtype":"float4e2m1","group_size":16,"scale_dtype":"float8e4m3","scale_2_type":"channel","ignore":["model.embed_tokens","projector"]}'
+export VLLM_HUMMING_INPUT_QUANT_CONFIG='{"dtype":"float4e2m1","group_size":16,"scale_dtype":"float8e4m3","quant_mode":"dynamic_group_token","allow_fallback":false}'
+```
+
+Humming packs FP4 weights as the BF16 checkpoint loads. The recipe uses
+E4M3 scales for groups of 16, a second weight scale per output channel, and
+a dynamic FP32 activation scale per token. The embedding table and marker
+projector use BF16. Treat the recipe as experimental pending retrieval-quality
+evaluation.
+
 ### CUDA allocator
 
 `source scripts/env.sh` defaults to PyTorch's native CUDA allocator with
