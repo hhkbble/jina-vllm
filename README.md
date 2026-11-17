@@ -61,7 +61,7 @@ another example on that port.
 ```bash
 common=(
   --host 127.0.0.1 --port 8000 --model-impl vllm --runner pooling
-  --dtype bfloat16 --max-num-seqs 16 --gpu-memory-utilization 0.75
+  --dtype bfloat16 --max-num-seqs 64 --gpu-memory-utilization 0.75
   --no-enable-prefix-caching --disable-flashinfer-autotune
 )
 fa2=(
@@ -253,6 +253,60 @@ marker projector use BF16. Text Small merges the selected adapter from the
 full snapshot before weight quantization and uses the native FP32 LAST pooling
 head. The HTTP `dimensions` option works with this configuration. Treat the
 recipe as experimental pending retrieval-quality evaluation.
+
+### Mixed W4A4/W8A8 Linear
+
+Both Jina plugin models support this recipe on SM120 with pool-free
+`fp8_per_block` attention.
+
+- **CUTLASS W8A8** uses `fp8_per_channel` for `self_attn.o_proj` and
+  `mlp.down_proj` (56 linears per model), with per-output-channel weight
+  scales and dynamic per-token activation scales.
+- **Humming W4A4** uses FP4 E2M1 weights and activations for
+  `self_attn.qkv_proj` and `mlp.gate_up_proj` (56 linears per model), with
+  E4M3 scales for groups of 16. Weights are quantized at load time and use
+  a second scale per output channel (`scale_2_type=channel`). Activations
+  use `dynamic_group_token` with `allow_fallback=false`.
+
+Humming's `dynamic` rule excludes the W8A8 projections by their runtime layer
+names. vLLM's `targets` assigns their FP8 scheme. Choose one model using the
+arrays defined above.
+
+```bash
+export VLLM_PLUGINS=jina_vllm VLLM_USE_V2_MODEL_RUNNER=1
+model=("${reranker[@]}")
+# model=("${embedding_plugin[@]}")
+
+export VLLM_HUMMING_ONLINE_QUANT_CONFIG='{
+  "dtype":"float4e2m1",
+  "group_size":16,
+  "scale_dtype":"float8e4m3",
+  "scale_2_type":"channel",
+  "ignore":["embed_tokens","projector"],
+  "dynamic":{"-:.*[.](self_attn[.]o_proj|mlp[.]down_proj)$":{}}
+}'
+export VLLM_HUMMING_INPUT_QUANT_CONFIG='{
+  "dtype":"float4e2m1",
+  "group_size":16,
+  "scale_dtype":"float8e4m3",
+  "quant_mode":"dynamic_group_token",
+  "allow_fallback":false
+}'
+
+vllm serve "${model[@]}" "${pool_free[@]}" --quantization humming \
+  --quantization-config '{
+    "targets":{
+      "*self_attn.o_proj":"fp8_per_channel",
+      "*mlp.down_proj":"fp8_per_channel"
+    }
+  }' \
+  --linear-backend cutlass \
+  --attention-backend JINA_FP8_PREFILL --kv-cache-dtype fp8_per_block
+```
+
+Both models passed HTTP checks on RTX 5090 with `--max-num-seqs 64`,
+including a 131,072-token reranker block and a 32,768-token embedding input.
+The mixed recipe is experimental pending retrieval-quality evaluation.
 
 ### CUDA allocator
 
